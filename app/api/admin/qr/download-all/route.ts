@@ -87,7 +87,7 @@ export async function GET(request: NextRequest) {
     }
     const zipBuffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
 
-    return new NextResponse(zipBuffer, {
+    return new NextResponse(new Uint8Array(zipBuffer), {
       headers: {
         'Content-Type': 'application/zip',
         'Content-Disposition': 'attachment; filename="NMIET-treasure-hunt-qr-codes.zip"',

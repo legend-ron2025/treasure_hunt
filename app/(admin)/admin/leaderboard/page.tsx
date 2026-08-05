@@ -33,7 +33,7 @@ export default function LeaderboardPage() {
     fetchData();
     const iv = setInterval(fetchData, 5000);
     return () => clearInterval(iv);
-  }, []);
+  }, [router]);
 
   const lb = snapshot?.leaderboard ?? [];
   const rankBadge = (rank: number) => {

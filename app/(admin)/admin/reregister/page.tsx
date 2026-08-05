@@ -117,7 +117,7 @@ export default function ReregisterPage() {
           <p className="font-semibold">⚠️ Admin Testing Feature</p>
           <p className="text-xs text-amber-400">
             Re-registration allows cancelled participants to restart the event from Stage 1.
-            This is intended for testing only. The admin must confirm the student's exact name
+            This is intended for testing only. The admin must confirm the student&apos;s exact name
             and phone number before re-registering.
           </p>
         </div>
@@ -148,7 +148,7 @@ export default function ReregisterPage() {
           <div className="bg-gray-900 border border-gray-700 rounded-2xl overflow-hidden shadow-xl">
             <div className="px-5 py-3 border-b border-gray-700 flex items-center justify-between">
               <p className="text-white font-semibold text-sm">{filtered.length} Cancelled Participant{filtered.length !== 1 ? 's' : ''}</p>
-              <p className="text-gray-500 text-xs">Click "Re-Register" on any row to restore access</p>
+              <p className="text-gray-500 text-xs">Click &quot;Re-Register&quot; on any row to restore access</p>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">

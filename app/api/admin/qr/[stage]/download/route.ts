@@ -50,7 +50,7 @@ export async function GET(
   const isSvg = buf[0] === 0x3C;
   const ext = isSvg ? 'svg' : 'png';
 
-  return new NextResponse(buf, {
+  return new NextResponse(new Uint8Array(buf), {
     headers: {
       'Content-Type': isSvg ? 'image/svg+xml' : 'image/png',
       'Content-Disposition': `attachment; filename="stage-${stageNumber}-qr.${ext}"`,

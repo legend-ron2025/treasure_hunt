@@ -142,7 +142,7 @@ export default function LiveProgress() {
     fetchData();
     const iv = setInterval(fetchData, 2000);
     return () => clearInterval(iv);
-  }, []);
+  }, [router]);
 
   const filtered =
     snapshot?.participants.filter((p) =>

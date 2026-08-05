@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, useRef } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import type { DashboardSnapshot } from '@/lib/types';
 
@@ -109,7 +109,7 @@ export default function DashboardOverview() {
 
   function getToken() { return typeof window !== 'undefined' ? sessionStorage.getItem('adminToken') : null; }
 
-  async function fetchLive() {
+  const fetchLive = useCallback(async () => {
     const token = getToken();
     if (!token) { router.replace('/admin/login'); return; }
     const res = await fetch(`/api/admin/live?_t=${Date.now()}`, {
@@ -118,19 +118,19 @@ export default function DashboardOverview() {
     });
     if (res.status === 401) { router.replace('/admin/login'); return; }
     if (res.ok) { setSnapshot(await res.json()); setLastUpdated(new Date()); }
-  }
+  }, [router]);
 
-  async function fetchEventStatus() {
+  const fetchEventStatus = useCallback(async () => {
     const res = await fetch('/api/time', { cache: 'no-store' });
     if (res.ok) { const d = await res.json(); setEventStatus(d.eventStatus); }
-  }
+  }, []);
 
   useEffect(() => {
     fetchLive();
     fetchEventStatus();
     intervalRef.current = setInterval(fetchLive, 2000);
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  }, []);
+  }, [fetchLive, fetchEventStatus]);
 
   const s = snapshot?.summary;
 

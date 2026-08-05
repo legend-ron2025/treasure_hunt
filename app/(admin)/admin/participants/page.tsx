@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, FormEvent } from 'react';
+import { useCallback, useEffect, useState, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { AdminLayout } from '@/components/AdminLayout';
 
@@ -36,7 +36,7 @@ export default function ParticipantList() {
 
   function getToken() { return typeof window !== 'undefined' ? sessionStorage.getItem('adminToken') : null; }
 
-  async function load() {
+  const load = useCallback(async () => {
     const token = getToken();
     if (!token) { router.replace('/admin/login'); return; }
     const res = await fetch(`/api/admin/participants?_t=${Date.now()}`, {
@@ -45,13 +45,13 @@ export default function ParticipantList() {
     });
     if (res.status === 401) { router.replace('/admin/login'); return; }
     if (res.ok) { setParticipants(await res.json()); setLastUpdated(new Date()); }
-  }
+  }, [router]);
 
   useEffect(() => {
     load();
     const iv = setInterval(load, 10000);
     return () => clearInterval(iv);
-  }, []);
+  }, [load]);
 
   async function doReregister(e: FormEvent) {
     e.preventDefault();

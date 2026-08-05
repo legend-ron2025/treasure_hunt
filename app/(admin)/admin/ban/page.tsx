@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, FormEvent } from 'react';
+import { useCallback, useEffect, useState, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { AdminLayout } from '@/components/AdminLayout';
 
@@ -16,14 +16,14 @@ export default function BanListPage() {
 
   function getToken() { return typeof window !== 'undefined' ? sessionStorage.getItem('adminToken') : null; }
 
-  async function loadEntries() {
+  const loadEntries = useCallback(async () => {
     const token = getToken();
     if (!token) { router.replace('/admin/login'); return; }
     const res = await fetch('/api/admin/ban', { headers: { Authorization: `Bearer ${token}` } });
     if (res.ok) setEntries(await res.json());
-  }
+  }, [router]);
 
-  useEffect(() => { loadEntries(); }, []);
+  useEffect(() => { loadEntries(); }, [loadEntries]);
 
   async function handleAdd(e: FormEvent) {
     e.preventDefault();

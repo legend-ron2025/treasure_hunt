@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
   // Always fetch fresh from DB with no caching
   const rows = await db.select().from(participants);
 
-  let filtered = status ? rows.filter((p) => p.status === status) : rows;
+  const filtered = status ? rows.filter((p) => p.status === status) : rows;
 
   filtered.sort((a, b) => {
     if (sort === 'name_asc') return a.name.localeCompare(b.name);

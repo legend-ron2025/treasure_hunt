@@ -37,7 +37,7 @@ export default function ContentManagement() {
     fetch('/api/admin/stages', { headers: { Authorization: `Bearer ${token}` } })
       .then((r) => (r.ok ? r.json() : []))
       .then(setStages);
-  }, []);
+  }, [router]);
 
   function getField(n: number, field: keyof StageData): string {
     const e = editing[n];

@@ -49,7 +49,7 @@ export default function EventSchedule() {
     });
     fetch('/api/admin/reset-log', { headers: { Authorization: `Bearer ${token}` } })
       .then((r) => r.ok ? r.json() : []).then(setResetHistory);
-  }, []);
+  }, [router]);
 
   function parseLocal(dtLocal: string): Date {
     const [datePart, timePart] = dtLocal.split('T');

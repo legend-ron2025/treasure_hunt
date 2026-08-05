@@ -107,13 +107,54 @@ export async function generateQrCard(
     }
 
     if (wordFragment) {
-      // Wide box — 1400 wide × 380 tall — plenty of room for two text lines
-      const BOX_W  = 1400;
-      const BOX_H  = 380;
-      const BOX_X  = (CARD_W - BOX_W) / 2;
-      const BOX_Y  = QR_BOT + 430;
-      const LABEL_Y = BOX_Y + 120;
-      const VALUE_Y = BOX_Y + 300;
+      const wrappedWords = (() => {
+        const maxChars = 18;
+        const parts = wordFragment.split(/\s+/);
+        const lines: string[] = [];
+        let current = '';
+
+        for (const part of parts) {
+          if (!current) {
+            current = part;
+            continue;
+          }
+
+          if (current.length + 1 + part.length <= maxChars) {
+            current += ` ${part}`;
+          } else {
+            lines.push(current);
+            if (part.length <= maxChars) {
+              current = part;
+            } else {
+              let start = 0;
+              while (start < part.length) {
+                lines.push(part.slice(start, start + maxChars));
+                start += maxChars;
+              }
+              current = '';
+            }
+          }
+        }
+
+        if (current) lines.push(current);
+        return lines.length === 0 ? [wordFragment] : lines;
+      })();
+
+      const lineCount = wrappedWords.length;
+      const textFontSize = lineCount > 1 ? 120 : 160;
+      const textLetterSpacing = lineCount > 1 ? 10 : 14;
+      const lineHeight = Math.round(textFontSize * 1.15);
+      const BOX_W = 1400;
+      const BOX_H = 180 + lineCount * lineHeight;
+      const BOX_X = (CARD_W - BOX_W) / 2;
+      const BOX_Y = QR_BOT + 430;
+      const LABEL_Y = BOX_Y + 115;
+      const VALUE_START_Y = BOX_Y + 190;
+
+      const valueLines = wrappedWords
+        .map((line, index) => `
+          <tspan x="${CARD_W / 2}" dy="${index === 0 ? 0 : lineHeight}">${line}</tspan>`)
+        .join('');
 
       bottomSvg += `
         <rect x="${BOX_X}" y="${BOX_Y}"
@@ -122,10 +163,12 @@ export async function generateQrCard(
         <text x="${CARD_W / 2}" y="${LABEL_Y}"
           font-family="Arial, Helvetica, sans-serif"
           font-size="82" fill="#7d5a00" text-anchor="middle">Remember this word!</text>
-        <text x="${CARD_W / 2}" y="${VALUE_Y}"
+        <text x="${CARD_W / 2}" y="${VALUE_START_Y}"
           font-family="'Courier New', Courier, monospace"
-          font-size="160" font-weight="bold"
-          fill="#7d5a00" text-anchor="middle" letter-spacing="14">${wordFragment}</text>`;
+          font-size="${textFontSize}" font-weight="bold"
+          fill="#7d5a00" text-anchor="middle" letter-spacing="${textLetterSpacing}">
+          ${valueLines}
+        </text>`;
     }
   }
 
