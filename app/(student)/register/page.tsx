@@ -152,10 +152,13 @@ export default function RegistrationPage() {
             <div className="text-5xl" aria-hidden="true">🚫</div>
             <h2 className="text-xl font-bold text-red-700">You Quit the Event!</h2>
             <p className="text-sm text-gray-700">
-              You navigated away from the event, so your registration has been permanently cancelled.
+              You closed, minimized, or left the browser during the event, so you have been disqualified from the treasure hunt.
             </p>
             <p className="text-sm font-semibold text-red-600">
-              You are not allowed to re-register or participate in this event again.
+              Your registration has been permanently cancelled and your details have been added to the ban list.
+            </p>
+            <p className="text-xs text-gray-500">
+              If event staff want to allow you back in, an administrator can manually re-register you.
             </p>
           </div>
         </main>

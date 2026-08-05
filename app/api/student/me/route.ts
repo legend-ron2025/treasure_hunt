@@ -33,6 +33,13 @@ export async function GET(request: NextRequest) {
     name: participant.name,
     currentStage: participant.current_stage,
     status,
+    cancelReason:
+      participant.cancel_reason === 'dropout_tab_close' ||
+      participant.cancel_reason === 'dropout_navigation' ||
+      participant.cancel_reason === 'dropout_inactivity' ||
+      participant.cancel_reason === 'admin_manual'
+        ? participant.cancel_reason
+        : undefined,
   };
 
   return NextResponse.json(body);

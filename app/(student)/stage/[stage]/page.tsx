@@ -80,27 +80,40 @@ export default function StagePage() {
       }
     }, 2 * 60 * 1000);
 
-    function beforeUnload() {
+    function sendDropout(reason: 'dropout_tab_close' | 'dropout_navigation') {
       const t = localStorage.getItem('studentToken');
-      if (t) navigator.sendBeacon('/api/student/dropout', new Blob([JSON.stringify({ token: t, reason: 'dropout_tab_close' })], { type: 'application/json' }));
+      if (!t) return;
+      if (typeof navigator?.sendBeacon !== 'function') return;
+      try {
+        navigator.sendBeacon('/api/student/dropout', new Blob([JSON.stringify({ token: t, reason })], { type: 'application/json' }));
+      } catch {
+        // Ignore unsupported or failing beacon calls.
+      }
     }
-    function visChange() {
+
+    function handleBeforeUnload() {
+      sendDropout('dropout_tab_close');
+    }
+
+    function handleVisibilityChange() {
       const t = localStorage.getItem('studentToken');
       if (!t) return;
       if (document.hidden) {
         visibilityTimerRef.current = setTimeout(() => {
-          navigator.sendBeacon('/api/student/dropout', new Blob([JSON.stringify({ token: t, reason: 'dropout_navigation' })], { type: 'application/json' }));
+          sendDropout('dropout_navigation');
         }, 5000);
       } else {
         if (visibilityTimerRef.current) { clearTimeout(visibilityTimerRef.current); visibilityTimerRef.current = null; }
       }
     }
-    window.addEventListener('beforeunload', beforeUnload);
-    document.addEventListener('visibilitychange', visChange);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('pagehide', handleBeforeUnload);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => {
       clearInterval(hb);
-      window.removeEventListener('beforeunload', beforeUnload);
-      document.removeEventListener('visibilitychange', visChange);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('pagehide', handleBeforeUnload);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       if (visibilityTimerRef.current) clearTimeout(visibilityTimerRef.current);
     };
   }, [router, stageNumber]);
@@ -167,9 +180,9 @@ export default function StagePage() {
           <button
             type="button"
             onClick={() => router.push(`/qr/scan/${stageNumber}`)}
-            className="text-sm bg-blue-600 text-white px-3 py-1 rounded-lg hover:bg-blue-700 transition-colors"
+            className="text-sm bg-emerald-600 text-white px-3 py-2 rounded-xl hover:bg-emerald-700 transition-colors shadow-lg shadow-emerald-500/20"
           >
-            📷 Open Scanner
+            📷 Scan QR for this stage
           </button>
         </div>
 

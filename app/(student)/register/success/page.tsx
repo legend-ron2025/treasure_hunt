@@ -38,9 +38,8 @@ export default function RegistrationSuccess() {
 
     // Auto-open in-browser scanner shortly after showing success page
     const autoTimer = setTimeout(() => {
-      // Keep the user on this page if they were redirected away already
       const t = localStorage.getItem('studentToken');
-      if (t) router.push('/qr/scan/1');
+      if (t) router.push('/stage/1');
     }, 900);
 
     // Heartbeat every 2 minutes
@@ -52,10 +51,19 @@ export default function RegistrationSuccess() {
       }
     }, 2 * 60 * 1000);
 
-    function handleBeforeUnload() {
+    function sendDropout(reason: 'dropout_tab_close' | 'dropout_navigation') {
       const t = localStorage.getItem('studentToken');
-      if (t) navigator.sendBeacon('/api/student/dropout',
-        new Blob([JSON.stringify({ token: t, reason: 'dropout_tab_close' })], { type: 'application/json' }));
+      if (!t) return;
+      if (typeof navigator?.sendBeacon !== 'function') return;
+      try {
+        navigator.sendBeacon('/api/student/dropout', new Blob([JSON.stringify({ token: t, reason })], { type: 'application/json' }));
+      } catch {
+        // Ignore unsupported or failing beacon calls.
+      }
+    }
+
+    function handleBeforeUnload() {
+      sendDropout('dropout_tab_close');
     }
 
     function handleVisibilityChange() {
@@ -63,8 +71,7 @@ export default function RegistrationSuccess() {
       if (!t) return;
       if (document.hidden) {
         visibilityTimerRef.current = setTimeout(() => {
-          navigator.sendBeacon('/api/student/dropout',
-            new Blob([JSON.stringify({ token: t, reason: 'dropout_navigation' })], { type: 'application/json' }));
+          sendDropout('dropout_navigation');
         }, 5000);
       } else {
         if (visibilityTimerRef.current) { clearTimeout(visibilityTimerRef.current); visibilityTimerRef.current = null; }
@@ -72,6 +79,7 @@ export default function RegistrationSuccess() {
     }
 
     window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('pagehide', handleBeforeUnload);
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
@@ -109,10 +117,10 @@ export default function RegistrationSuccess() {
             )}
             <div className="pt-1">
               <button
-                onClick={() => router.push('/qr/scan/1')}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-xl text-sm font-medium transition-colors"
+                onClick={() => router.push('/stage/1')}
+                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl text-sm font-medium transition-colors"
               >
-                📷 Open In-Browser Scanner
+                📜 View Stage 1 Puzzle
               </button>
             </div>
           </div>

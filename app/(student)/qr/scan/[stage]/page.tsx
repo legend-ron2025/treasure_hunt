@@ -17,6 +17,7 @@ export default function QRScanPage() {
   const [verifying, setVerifying] = useState(false);
   const [scannerKey, setScannerKey] = useState(0);
   const noDetectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const visibilityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const matchedRef = useRef(false);
   const html5QrCodeRef = useRef<any>(null);
 
@@ -50,6 +51,44 @@ export default function QRScanPage() {
 
     setStatus('starting');
     setError(null);
+
+    function sendDropout(reason: 'dropout_tab_close' | 'dropout_navigation') {
+      const token = localStorage.getItem('studentToken');
+      if (!token) return;
+      if (typeof navigator?.sendBeacon !== 'function') return;
+      try {
+        navigator.sendBeacon(
+          '/api/student/dropout',
+          new Blob([JSON.stringify({ token, reason })], { type: 'application/json' }),
+        );
+      } catch {
+        // Ignore unsupported or failing beacon calls.
+      }
+    }
+
+    function handleBeforeUnload() {
+      sendDropout('dropout_tab_close');
+    }
+
+    function handleVisibilityChange() {
+      const token = localStorage.getItem('studentToken');
+      if (!token) return;
+      if (document.hidden) {
+        visibilityTimerRef.current = setTimeout(() => {
+          navigator.sendBeacon(
+            '/api/student/dropout',
+            new Blob([JSON.stringify({ token, reason: 'dropout_navigation' })], { type: 'application/json' }),
+          );
+        }, 5000);
+      } else if (visibilityTimerRef.current) {
+        clearTimeout(visibilityTimerRef.current);
+        visibilityTimerRef.current = null;
+      }
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('pagehide', handleBeforeUnload);
+    window.addEventListener('visibilitychange', handleVisibilityChange);
 
     async function startScanner() {
       try {
@@ -109,7 +148,11 @@ export default function QRScanPage() {
 
     return () => {
       if (noDetectTimerRef.current) clearTimeout(noDetectTimerRef.current);
+      if (visibilityTimerRef.current) clearTimeout(visibilityTimerRef.current);
       html5QrCodeRef.current?.stop().catch(() => {});
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('pagehide', handleBeforeUnload);
+      window.removeEventListener('visibilitychange', handleVisibilityChange);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stageNumber, scannerKey]);
@@ -158,7 +201,7 @@ export default function QRScanPage() {
       }
 
       if (data.nextAction?.type === 'scan_qr' && data.nextAction.nextStage) {
-        router.push(`/qr/scan/${data.nextAction.nextStage}`);
+        router.push(`/stage/${data.nextAction.nextStage}`);
       } else if (data.nextAction?.type === 'congratulations') {
         router.push('/congratulations');
       } else if (data.nextAction?.type === 'goto_stage' && data.nextAction.nextStage) {

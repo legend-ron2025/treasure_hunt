@@ -218,6 +218,30 @@ export async function cancelParticipant(
     .set({ status: 'cancelled', cancelled_at: new Date(), cancel_reason: reason })
     .where(eq(participants.id, participantId));
 
+  // 1a. If this is a dropout disqualification, also add the student to the ban list.
+  if (p && (reason === 'dropout_tab_close' || reason === 'dropout_navigation' || reason === 'dropout_inactivity')) {
+    const existingBan = await db
+      .select({ id: banList.id })
+      .from(banList)
+      .where(
+        or(
+          and(
+            sql`${banList.name} IS NOT NULL`,
+            sql`LOWER(${banList.name}) = LOWER(${p.name})`,
+          ),
+          and(
+            sql`${banList.phone} IS NOT NULL`,
+            eq(banList.phone, p.phone),
+          ),
+        ),
+      )
+      .limit(1);
+
+    if (existingBan.length === 0) {
+      await db.insert(banList).values({ name: p.name, phone: p.phone });
+    }
+  }
+
   // 2. Deactivate all their sessions
   await db
     .update(studentSessions)

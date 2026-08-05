@@ -20,7 +20,7 @@ export default function SessionWarningBanner() {
             IMPORTANT WARNING — Do NOT close this tab or leave this page!
           </p>
           <p className="text-xs mt-0.5 text-red-100 leading-snug">
-            If you quit, navigate away, or close the browser during the event, your registration
+            If you quit, minimize, navigate away, or close the browser during the event, your registration
             will be permanently cancelled and you will <strong>not be allowed to re-register</strong> or
             participate in this event again.
           </p>

@@ -391,6 +391,7 @@ export interface StudentMeResponse {
   name: string;
   currentStage: number;
   status: ParticipantStatus;
+  cancelReason?: CancelReason;
 }
 
 /**
