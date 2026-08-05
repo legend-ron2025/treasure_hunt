@@ -19,6 +19,11 @@ export default function StagePage() {
   const visibilityTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
+    if (isNaN(stageNumber) || stageNumber < 1 || stageNumber > 5) {
+      router.replace('/register');
+      return;
+    }
+
     // Redirect to canonical domain if necessary (handles old/deleted QR links)
     try {
       const canonical = process.env.NEXT_PUBLIC_BASE_URL;
@@ -52,7 +57,7 @@ export default function StagePage() {
           if (t) {
             fetch('/api/student/me', { headers: { Authorization: `Bearer ${t}` } })
               .then((r) => r.ok ? r.json() : null)
-              .then((me) => {
+                  .then((me) => {
                 if (!me || me.status === 'cancelled') { router.replace('/register'); return; }
                 if (me.currentStage >= 6 || me.status === 'completed') { router.replace('/congratulations'); return; }
                 // Already past this stage — go to next pending stage QR scan
