@@ -1,13 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAdminAuth, isAuthError } from '@/lib/adminAuth';
-import { db } from '@/lib/db';
-import { stages, registrationQr, stageQrHistory, registrationQrHistory } from '@/lib/db/schema';
-import { eq } from 'drizzle-orm';
-import { generateQrCard } from '@/lib/services/qr.service';
+import { generateAndPersistQrCards } from '@/lib/services/qr.service';
 
 export const dynamic = 'force-dynamic';
-
-const COLLEGE_NAME = 'RJMMsVishwakamal Mahavidhayal';
 
 /**
  * Derive the public base URL from the incoming request.
@@ -43,66 +38,17 @@ export async function POST(request: NextRequest) {
   const baseUrl = getBaseUrl(request);
   console.log('[QR Generate] Base URL:', baseUrl);
 
-  const errors: string[] = [];
-  const results: { type: string; url: string; success: boolean }[] = [];
-
-  // ── Registration QR ───────────────────────────────────────────────────────
-  try {
-    const url = `${baseUrl}/register`;
-    console.log('[QR Generate] Registration QR URL:', url);
-    const card = await generateQrCard(url, {
-      collegeName: COLLEGE_NAME,
-      isRegistration: true,
-    });
-    // Insert a history record so previous generated cards are preserved
-    await db.insert(registrationQrHistory).values({ qr_url: url, styled_qr_png: card });
-    // Update current registration QR pointer
-    await db
-      .update(registrationQr)
-      .set({ styled_qr_png: card, qr_url: url, updated_at: new Date() })
-      .where(eq(registrationQr.id, 1));
-    results.push({ type: 'registration', url, success: true });
-    console.log('[QR Generate] Registration QR: OK');
-  } catch (e: any) {
-    const msg = `Registration QR: ${e?.message ?? String(e)}`;
-    errors.push(msg);
-    console.error('[QR Generate]', msg);
-  }
-
-  // ── Puzzle QRs 1–5 ───────────────────────────────────────────────────────
-  const allStages = await db.select().from(stages).orderBy(stages.stage_number);
-
-  for (const s of allStages) {
-    try {
-      // Always use the absolute URL based on the current host
-      const url = `${baseUrl}/stage/${s.stage_number}`;
-      console.log(`[QR Generate] Stage ${s.stage_number} QR URL:`, url);
-      const card = await generateQrCard(url, {
-        collegeName: COLLEGE_NAME,
-        accessCode: s.access_code,
-        wordFragment: s.word_fragment ?? undefined,
-      });
-      // Preserve previous card in history before updating
-      await db.insert(stageQrHistory).values({ stage_number: s.stage_number, qr_url: url, styled_qr_card_png: card });
-      await db
-        .update(stages)
-        .set({ styled_qr_card_png: card, qr_url: url, updated_at: new Date() })
-        .where(eq(stages.stage_number, s.stage_number));
-      results.push({ type: `stage-${s.stage_number}`, url, success: true });
-      console.log(`[QR Generate] Stage ${s.stage_number} QR: OK`);
-    } catch (e: any) {
-      const msg = `Stage ${s.stage_number} QR: ${e?.message ?? String(e)}`;
-      errors.push(msg);
-      console.error('[QR Generate]', msg);
-    }
-  }
+  const results = await generateAndPersistQrCards(baseUrl);
+  const generated = results.filter((r) => r.success).length;
+  const errors = results.filter((r) => !r.success).map((r) => `${r.type}: ${r.error ?? 'Unknown error'}`);
 
   if (errors.length > 0) {
     return NextResponse.json(
-      { generated: results.filter((r) => r.success).length, total: 6, errors, results },
-      { status: errors.length === 6 ? 500 : 207 },
+      { generated, total: results.length, errors, results },
+      { status: errors.length === results.length ? 500 : 207 },
     );
   }
 
-  return NextResponse.json({ generated: 6, total: 6, results });
+  return NextResponse.json({ generated: results.length, total: results.length, results });
 }
+

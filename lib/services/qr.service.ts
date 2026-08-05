@@ -12,6 +12,14 @@
  */
 
 import QRCode from 'qrcode';
+import { db } from '@/lib/db';
+import { eq } from 'drizzle-orm';
+import {
+  stages,
+  registrationQr,
+  stageQrHistory,
+  registrationQrHistory,
+} from '@/lib/db/schema';
 
 const CARD_W = 2480;
 const CARD_H = 3508;
@@ -195,4 +203,84 @@ export async function generateQrCard(
 </svg>`;
 
   return Buffer.from(svg, 'utf-8');
+}
+
+async function tryInsertHistory<T>(insertFn: () => Promise<T>, description: string) {
+  try {
+    await insertFn();
+  } catch (err: any) {
+    console.warn(`[QR Service] ${description} history insert failed; continuing.`, err?.message ?? err);
+  }
+}
+
+export type GenerateQrResults = Array<{
+  type: string;
+  url: string;
+  success: boolean;
+  error?: string;
+}>;
+
+export async function generateAndPersistQrCards(baseUrl: string): Promise<GenerateQrResults> {
+  const results: GenerateQrResults = [];
+  const collegeName = 'RJMMsVishwakamal Mahavidhayal';
+
+  // Registration QR
+  try {
+    const registrationUrl = `${baseUrl}/register`;
+    const registrationCard = await generateQrCard(registrationUrl, {
+      collegeName,
+      isRegistration: true,
+    });
+
+    await tryInsertHistory(
+      () => db.insert(registrationQrHistory).values({ qr_url: registrationUrl, styled_qr_png: registrationCard }),
+      'Registration QR',
+    );
+
+    await db
+      .insert(registrationQr)
+      .values({ id: 1, qr_url: registrationUrl, styled_qr_png: registrationCard, updated_at: new Date() })
+      .onConflictDoUpdate({
+        target: registrationQr.id,
+        set: { qr_url: registrationUrl, styled_qr_png: registrationCard, updated_at: new Date() },
+      });
+
+    results.push({ type: 'registration', url: registrationUrl, success: true });
+  } catch (err: any) {
+    results.push({ type: 'registration', url: `${baseUrl}/register`, success: false, error: String(err?.message ?? err) });
+  }
+
+  const allStages = await db.select().from(stages).orderBy(stages.stage_number);
+
+  for (const stageRow of allStages) {
+    try {
+      const stageUrl = `${baseUrl}/stage/${stageRow.stage_number}`;
+      const stageCard = await generateQrCard(stageUrl, {
+        collegeName,
+        accessCode: stageRow.access_code,
+        wordFragment: stageRow.word_fragment ?? undefined,
+      });
+
+      await tryInsertHistory(
+        () =>
+          db.insert(stageQrHistory).values({
+            stage_number: stageRow.stage_number,
+            qr_url: stageUrl,
+            styled_qr_card_png: stageCard,
+          }),
+        `Stage ${stageRow.stage_number} QR`,
+      );
+
+      await db
+        .update(stages)
+        .set({ styled_qr_card_png: stageCard, qr_url: stageUrl, updated_at: new Date() })
+        .where(eq(stages.stage_number, stageRow.stage_number));
+
+      results.push({ type: `stage-${stageRow.stage_number}`, url: stageUrl, success: true });
+    } catch (err: any) {
+      results.push({ type: `stage-${stageRow.stage_number}`, url: `${baseUrl}/stage/${stageRow.stage_number}`, success: false, error: String(err?.message ?? err) });
+    }
+  }
+
+  return results;
 }
