@@ -85,7 +85,7 @@ export default function QRScanPage() {
 
     window.addEventListener('beforeunload', handleBeforeUnload);
     window.addEventListener('pagehide', handleBeforeUnload);
-    window.addEventListener('visibilitychange', handleVisibilityChange);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     async function startScanner() {
       try {
@@ -197,14 +197,26 @@ export default function QRScanPage() {
         return;
       }
 
-      if (data.nextAction?.type === 'scan_qr' && data.nextAction.nextStage) {
-        router.push(`/stage/${data.nextAction.nextStage}`);
-      } else if (data.nextAction?.type === 'congratulations') {
-        router.push('/congratulations');
-      } else if (data.nextAction?.type === 'goto_stage' && data.nextAction.nextStage) {
-        router.push(`/stage/${data.nextAction.nextStage}`);
-      } else {
-        router.push(`/stage/${stageNumber}`);
+      try {
+        if (data.nextAction?.type === 'scan_qr' && data.nextAction.nextStage) {
+          await router.push(`/stage/${data.nextAction.nextStage}`);
+          window.location.href = `${window.location.origin}/stage/${data.nextAction.nextStage}`;
+          return;
+        }
+        if (data.nextAction?.type === 'congratulations') {
+          await router.push('/congratulations');
+          window.location.href = `${window.location.origin}/congratulations`;
+          return;
+        }
+        if (data.nextAction?.type === 'goto_stage' && data.nextAction.nextStage) {
+          await router.push(`/stage/${data.nextAction.nextStage}`);
+          window.location.href = `${window.location.origin}/stage/${data.nextAction.nextStage}`;
+          return;
+        }
+        await router.push(`/stage/${stageNumber}`);
+        window.location.href = `${window.location.origin}/stage/${stageNumber}`;
+      } catch {
+        window.location.href = `${window.location.origin}/stage/${stageNumber}`;
       }
     } catch (err: any) {
       setAccessError('Network error. Please try again.');
