@@ -75,10 +75,7 @@ export default function QRScanPage() {
       if (!token) return;
       if (document.hidden) {
         visibilityTimerRef.current = setTimeout(() => {
-          navigator.sendBeacon(
-            '/api/student/dropout',
-            new Blob([JSON.stringify({ token, reason: 'dropout_navigation' })], { type: 'application/json' }),
-          );
+          sendDropout('dropout_navigation');
         }, 5000);
       } else if (visibilityTimerRef.current) {
         clearTimeout(visibilityTimerRef.current);

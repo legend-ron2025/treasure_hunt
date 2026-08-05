@@ -16,7 +16,7 @@ export default function StagePage() {
   const [codeError, setCodeError] = useState('');
   const [apiError, setApiError] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const visibilityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const visibilityTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     // Redirect to canonical domain if necessary (handles old/deleted QR links)
@@ -72,23 +72,26 @@ export default function StagePage() {
         }
       });
 
-    // Heartbeat
+    function safeSendBeacon(url: string, payload: unknown) {
+      if (typeof navigator?.sendBeacon !== 'function') return false;
+      try {
+        return navigator.sendBeacon(url, new Blob([JSON.stringify(payload)], { type: 'application/json' }));
+      } catch {
+        return false;
+      }
+    }
+
     const hb = setInterval(() => {
       const t = localStorage.getItem('studentToken');
       if (t && !document.hidden) {
-        navigator.sendBeacon('/api/student/heartbeat', new Blob([JSON.stringify({ token: t })], { type: 'application/json' }));
+        safeSendBeacon('/api/student/heartbeat', { token: t });
       }
     }, 2 * 60 * 1000);
 
     function sendDropout(reason: 'dropout_tab_close' | 'dropout_navigation') {
       const t = localStorage.getItem('studentToken');
       if (!t) return;
-      if (typeof navigator?.sendBeacon !== 'function') return;
-      try {
-        navigator.sendBeacon('/api/student/dropout', new Blob([JSON.stringify({ token: t, reason })], { type: 'application/json' }));
-      } catch {
-        // Ignore unsupported or failing beacon calls.
-      }
+      safeSendBeacon('/api/student/dropout', { token: t, reason });
     }
 
     function handleBeforeUnload() {
@@ -99,7 +102,7 @@ export default function StagePage() {
       const t = localStorage.getItem('studentToken');
       if (!t) return;
       if (document.hidden) {
-        visibilityTimerRef.current = setTimeout(() => {
+        visibilityTimerRef.current = window.setTimeout(() => {
           sendDropout('dropout_navigation');
         }, 5000);
       } else {

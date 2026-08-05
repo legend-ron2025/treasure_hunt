@@ -36,18 +36,16 @@ export default function RegistrationSuccess() {
       if (stage?.hintText) setHint(stage.hintText);
     }).catch(() => {});
 
-    // Auto-open in-browser scanner shortly after showing success page
-    const autoTimer = setTimeout(() => {
-      const t = localStorage.getItem('studentToken');
-      if (t) router.push('/stage/1');
-    }, 900);
-
     // Heartbeat every 2 minutes
     const heartbeatInterval = setInterval(() => {
       const t = localStorage.getItem('studentToken');
-      if (t && !document.hidden) {
-        navigator.sendBeacon('/api/student/heartbeat',
-          new Blob([JSON.stringify({ token: t })], { type: 'application/json' }));
+      if (t && !document.hidden && typeof navigator?.sendBeacon === 'function') {
+        try {
+          navigator.sendBeacon('/api/student/heartbeat',
+            new Blob([JSON.stringify({ token: t })], { type: 'application/json' }));
+        } catch {
+          // Ignore heartbeat failures.
+        }
       }
     }, 2 * 60 * 1000);
 
@@ -86,7 +84,6 @@ export default function RegistrationSuccess() {
       clearInterval(heartbeatInterval);
       window.removeEventListener('beforeunload', handleBeforeUnload);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
-      clearTimeout(autoTimer);
       if (visibilityTimerRef.current) clearTimeout(visibilityTimerRef.current);
     };
   }, [router]);
