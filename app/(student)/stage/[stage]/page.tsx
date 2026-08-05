@@ -179,7 +179,7 @@ export default function StagePage() {
           <h2 className="text-xl font-bold text-gray-800">Stage {stageNumber}</h2>
           {content && <span className={`text-xs font-semibold px-2 py-1 rounded-full ${diffClass}`}>{content.difficulty}</span>}
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col gap-3">
           <button
             type="button"
             onClick={() => router.push(`/qr/scan/${stageNumber}`)}
@@ -187,6 +187,9 @@ export default function StagePage() {
           >
             📷 Scan QR for this stage
           </button>
+          <p className="text-sm text-gray-500 leading-relaxed">
+            Find the place of the next QR / solve the riddle, then scan the QR for verification and type the given ACCESS CODE correctly to go to the next stage.
+          </p>
         </div>
 
         {content && (

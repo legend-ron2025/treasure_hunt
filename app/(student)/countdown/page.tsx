@@ -144,12 +144,35 @@ export default function CountdownPage() {
   }, [startMs, status, doRedirect]);
 
   const pad = (n: number) => String(n).padStart(2, '0');
+  const rules = [
+    'Do not close the tab or navigate away once you begin the event.',
+    'Solve the stage puzzle before scanning the QR for verification.',
+    'Scan the next stage QR only after finding its location.',
+    'Type the access code exactly as shown to move forward.',
+    'Leaving the page may cancel your registration permanently.',
+  ];
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-950 via-blue-900 to-indigo-900 flex flex-col">
       <CollegeHeader />
       <main className="flex-1 flex items-center justify-center px-4 py-8">
         <div className="w-full max-w-md bg-white/10 backdrop-blur-sm rounded-3xl shadow-2xl p-8 text-center space-y-6 border border-white/20">
+          <div className="space-y-4 text-left">
+            <h2 className="text-xl font-bold text-white">Rules for the Treasure Hunt</h2>
+            <p className="text-blue-200 text-sm">Read these carefully before the start so you can proceed smoothly:</p>
+            <ul className="space-y-3">
+              {rules.map((rule, index) => (
+                <li
+                  key={rule}
+                  className="flex gap-3 rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-sm text-blue-50 transition hover:border-blue-300/40 hover:bg-blue-800/40"
+                >
+                  <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-blue-500 text-xs font-bold text-white">{index + 1}</span>
+                  <span>{rule}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div className="h-px bg-white/10" />
 
           {status === 'loading' && (
             <div className="space-y-4">
