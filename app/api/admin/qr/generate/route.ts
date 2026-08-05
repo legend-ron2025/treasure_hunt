@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAdminAuth, isAuthError } from '@/lib/adminAuth';
 import { db } from '@/lib/db';
-import { stages, registrationQr } from '@/lib/db/schema';
+import { stages, registrationQr, stageQrHistory, registrationQrHistory } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { generateQrCard } from '@/lib/services/qr.service';
 
@@ -54,6 +54,9 @@ export async function POST(request: NextRequest) {
       collegeName: COLLEGE_NAME,
       isRegistration: true,
     });
+    // Insert a history record so previous generated cards are preserved
+    await db.insert(registrationQrHistory).values({ qr_url: url, styled_qr_png: card });
+    // Update current registration QR pointer
     await db
       .update(registrationQr)
       .set({ styled_qr_png: card, qr_url: url, updated_at: new Date() })
@@ -79,6 +82,8 @@ export async function POST(request: NextRequest) {
         accessCode: s.access_code,
         wordFragment: s.word_fragment ?? undefined,
       });
+      // Preserve previous card in history before updating
+      await db.insert(stageQrHistory).values({ stage_number: s.stage_number, qr_url: url, styled_qr_card_png: card });
       await db
         .update(stages)
         .set({ styled_qr_card_png: card, qr_url: url, updated_at: new Date() })

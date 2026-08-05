@@ -131,6 +131,27 @@ export const registrationQr = pgTable('registration_qr', {
   updated_at: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+// ─── stage_qr_history ───────────────────────────────────────────────────────
+
+export const stageQrHistory = pgTable('stage_qr_history', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  stage_number: smallint('stage_number').notNull(),
+  qr_url: text('qr_url').notNull(),
+  styled_qr_card_png: bytea('styled_qr_card_png'),
+  created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  check('chk_stage_number_hist', sql`${t.stage_number} BETWEEN 1 AND 5`),
+]);
+
+// ─── registration_qr_history ─────────────────────────────────────────────────
+
+export const registrationQrHistory = pgTable('registration_qr_history', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  qr_url: text('qr_url').notNull(),
+  styled_qr_png: bytea('styled_qr_png'),
+  created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 // ─── ban_list ─────────────────────────────────────────────────────────────────
 
 export const banList = pgTable(
