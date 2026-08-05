@@ -15,6 +15,7 @@ export default function QRScanPage() {
   const [accessCode, setAccessCode] = useState('');
   const [accessError, setAccessError] = useState('');
   const [verifying, setVerifying] = useState(false);
+  const [scannerKey, setScannerKey] = useState(0);
   const noDetectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const matchedRef = useRef(false);
   const html5QrCodeRef = useRef<any>(null);
@@ -48,6 +49,7 @@ export default function QRScanPage() {
     }
 
     setStatus('starting');
+    setError(null);
 
     async function startScanner() {
       try {
@@ -66,15 +68,15 @@ export default function QRScanPage() {
               noDetectTimerRef.current = null;
             }
 
-              if (isCorrectQr(decodedText)) {
-                matchedRef.current = true;
-                setStatus('matched');
-                // Stop camera and prompt user for the access code for this stage.
-                qr.stop().catch(() => {});
-                setShowAccessModal(true);
-              } else {
-              setStatus('mismatch');
-              setError('Wrong QR code. Please find the correct one.');
+            if (isCorrectQr(decodedText)) {
+              matchedRef.current = true;
+              setStatus('matched');
+              setError(null);
+              qr.stop().catch(() => {});
+              setShowAccessModal(true);
+            } else {
+              setStatus('scanning');
+              setError('Wrong QR code. Please scan the correct QR for this stage.');
             }
           },
           () => { /* per-frame error — ignore */ },
@@ -110,17 +112,22 @@ export default function QRScanPage() {
       html5QrCodeRef.current?.stop().catch(() => {});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stageNumber]);
+  }, [stageNumber, scannerKey]);
 
   function handleRetry() {
     // Stop existing scanner and restart
     html5QrCodeRef.current?.stop().catch(() => {});
-    setError(null);
-    setStatus('idle');
+    if (noDetectTimerRef.current) {
+      clearTimeout(noDetectTimerRef.current);
+      noDetectTimerRef.current = null;
+    }
     matchedRef.current = false;
-    if (noDetectTimerRef.current) clearTimeout(noDetectTimerRef.current);
-    // Re-mount by navigating to same page
-    window.location.reload();
+    setError(null);
+    setAccessCode('');
+    setAccessError('');
+    setShowAccessModal(false);
+    setStatus('starting');
+    setScannerKey((key) => key + 1);
   }
 
   async function verifyAccessCode() {
@@ -139,22 +146,38 @@ export default function QRScanPage() {
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
-        setAccessError(data.error ?? 'Invalid access code.');
-        setVerifying(false);
+        const errorMessage = data.error ?? 'Access code is wrong. Please retry.';
+        setAccessError(errorMessage);
+        setShowAccessModal(false);
+        setAccessCode('');
+        setError('Access code is wrong. Please scan the QR again and retry.');
+        setStatus('starting');
+        matchedRef.current = false;
+        setScannerKey((key) => key + 1);
         return;
       }
 
-      // On success, follow server's nextAction if present
       if (data.nextAction?.type === 'scan_qr' && data.nextAction.nextStage) {
         router.push(`/qr/scan/${data.nextAction.nextStage}`);
+      } else if (data.nextAction?.type === 'congratulations') {
+        router.push('/congratulations');
       } else if (data.nextAction?.type === 'goto_stage' && data.nextAction.nextStage) {
         router.push(`/stage/${data.nextAction.nextStage}`);
       } else {
-        // Default: go to this stage page
         router.push(`/stage/${stageNumber}`);
       }
     } catch (err: any) {
       setAccessError('Network error. Please try again.');
+      setShowAccessModal(false);
+      setStatus('scanning');
+      matchedRef.current = false;
+      setTimeout(() => {
+        if (html5QrCodeRef.current) {
+          html5QrCodeRef.current.stop().catch(() => {});
+        }
+        window.location.reload();
+      }, 200);
+    } finally {
       setVerifying(false);
     }
   }
@@ -237,7 +260,7 @@ export default function QRScanPage() {
                   {accessError && <p className="text-sm text-red-600">{accessError}</p>}
                   <div className="flex gap-2">
                     <button
-                      onClick={() => { setShowAccessModal(false); window.location.reload(); }}
+                      onClick={handleRetry}
                       className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-800 py-2 rounded-lg"
                     >
                       Cancel
