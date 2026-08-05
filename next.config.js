@@ -10,6 +10,7 @@ const nextConfig = {
         hostname: 'i.postimg.cc',
       },
     ],
+    unoptimized: false,
   },
 
   async headers() {

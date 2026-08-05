@@ -12,26 +12,41 @@ export default function RegistrationPage() {
   const [phoneError, setPhoneError] = useState('');
   const [apiError, setApiError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [eventReady, setEventReady] = useState<boolean | null>(null);
+  const [blockedCancelled, setBlockedCancelled] = useState(false);
 
-  // Redirect if already has active session
   useEffect(() => {
-    const token = localStorage.getItem('studentToken');
-    if (token) {
-      fetch('/api/student/me', {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-        .then((res) => res.ok ? res.json() : null)
-        .then((data) => {
-          if (data?.currentStage) {
-            if (data.currentStage > 5) {
-              router.replace('/congratulations');
-            } else {
-              router.replace(`/stage/${data.currentStage}`);
+    // Check event window first — redirect to countdown if not active
+    fetch('/api/time', { cache: 'no-store' })
+      .then((r) => r.ok ? r.json() : { eventStatus: 'before' })
+      .then((timeData) => {
+        if (timeData.eventStatus !== 'active') {
+          router.replace('/countdown');
+          return;
+        }
+        setEventReady(true);
+
+        // If already has an active session, redirect to current stage
+        const token = localStorage.getItem('studentToken');
+        if (!token) return;
+        fetch('/api/student/me', { headers: { Authorization: `Bearer ${token}` } })
+          .then((res) => res.ok ? res.json() : null)
+          .then((data) => {
+            if (!data) return;
+            if (data.status === 'cancelled') {
+              // Show blocked screen — set a flag and let render handle it
+              setBlockedCancelled(true);
+              return;
             }
-          }
-        })
-        .catch(() => {}); // ignore errors — stay on register page
-    }
+            if (data.currentStage >= 6 || data.status === 'completed') { router.replace('/congratulations'); return; }
+            router.replace(`/stage/${data.currentStage}`);
+          })
+          .catch(() => {});
+      })
+      .catch(() => {
+        // Network error — show form; API will reject if event isn't active
+        setEventReady(true);
+      });
   }, [router]);
 
   function validateName(value: string): string {
@@ -67,6 +82,11 @@ export default function RegistrationPage() {
       const data = await res.json();
 
       if (!res.ok) {
+        // Event window closed between page load and submit
+        if (res.status === 403) {
+          router.replace('/countdown');
+          return;
+        }
         setApiError(data.error ?? 'Registration failed. Please try again.');
         return;
       }
@@ -80,6 +100,39 @@ export default function RegistrationPage() {
     }
   }
 
+  // Blocked screen — cancelled student trying to re-register
+  if (blockedCancelled) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex flex-col">
+        <CollegeHeader />
+        <main className="flex-1 flex items-center justify-center px-4 py-8">
+          <div className="w-full max-w-sm bg-white rounded-xl shadow-md p-6 text-center space-y-4">
+            <div className="text-5xl" aria-hidden="true">🚫</div>
+            <h2 className="text-xl font-bold text-red-700">You Quit the Event!</h2>
+            <p className="text-sm text-gray-700">
+              You navigated away from the event, so your registration has been permanently cancelled.
+            </p>
+            <p className="text-sm font-semibold text-red-600">
+              You are not allowed to re-register or participate in this event again.
+            </p>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  // Spinner while checking event status
+  if (eventReady === null) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex flex-col">
+        <CollegeHeader />
+        <main className="flex-1 flex items-center justify-center">
+          <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
       <CollegeHeader />
@@ -90,7 +143,6 @@ export default function RegistrationPage() {
           <p className="text-sm text-gray-500 mb-6 text-center">Enter your details to join the hunt</p>
 
           <form onSubmit={handleSubmit} className="space-y-4" noValidate>
-            {/* Name */}
             <div>
               <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-1">
                 Full Name
@@ -109,14 +161,9 @@ export default function RegistrationPage() {
                 }`}
                 placeholder="e.g. Priya Sharma"
               />
-              {nameError && (
-                <p id="name-error" role="alert" className="mt-1 text-xs text-red-600">
-                  {nameError}
-                </p>
-              )}
+              {nameError && <p id="name-error" role="alert" className="mt-1 text-xs text-red-600">{nameError}</p>}
             </div>
 
-            {/* Phone */}
             <div>
               <label htmlFor="phone" className="block text-sm font-medium text-gray-700 mb-1">
                 Phone Number
@@ -137,14 +184,9 @@ export default function RegistrationPage() {
                 }`}
                 placeholder="10-digit number"
               />
-              {phoneError && (
-                <p id="phone-error" role="alert" className="mt-1 text-xs text-red-600">
-                  {phoneError}
-                </p>
-              )}
+              {phoneError && <p id="phone-error" role="alert" className="mt-1 text-xs text-red-600">{phoneError}</p>}
             </div>
 
-            {/* API error */}
             {apiError && (
               <div role="alert" className="bg-red-50 border border-red-200 rounded-lg px-3 py-2">
                 <p className="text-sm text-red-700">{apiError}</p>

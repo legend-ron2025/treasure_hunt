@@ -1,68 +1,168 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { AdminLayout } from '@/components/AdminLayout';
 
-type AuditEntry = { id: string; participantName: string; participantPhone: string; stageAtDeletion: number; action: string; performedBy: string; performedAt: string; extraInfo: string | null; };
+type LogEntry = {
+  id: string;
+  type: string;
+  timestamp: string;
+  summary: string;
+  detail: string;
+  studentName: string | null;
+  studentPhone: string | null;
+  performedBy: string;
+};
+
+const TYPE_CONFIG: Record<string, { label: string; color: string; icon: string }> = {
+  registration:     { label: 'Registration',      color: 'bg-green-900/50 text-green-300 border-green-700',    icon: '📝' },
+  dropout:          { label: 'Dropout',           color: 'bg-red-900/50 text-red-300 border-red-700',          icon: '🚪' },
+  ban:              { label: 'Ban',               color: 'bg-orange-900/50 text-orange-300 border-orange-700', icon: '🚫' },
+  stage_completion: { label: 'Stage Completed',   color: 'bg-blue-900/50 text-blue-300 border-blue-700',       icon: '✅' },
+  admin_action:     { label: 'Admin Action',      color: 'bg-purple-900/50 text-purple-300 border-purple-700', icon: '⚙️' },
+};
+
+const FILTER_TABS = [
+  { key: 'all',              label: 'All Logs' },
+  { key: 'registration',     label: 'Registrations' },
+  { key: 'stage_completion', label: 'Completions' },
+  { key: 'dropout',          label: 'Dropouts' },
+  { key: 'ban',              label: 'Bans' },
+  { key: 'admin_action',     label: 'Admin Actions' },
+];
 
 export default function AuditLog() {
   const router = useRouter();
-  const [entries, setEntries] = useState<AuditEntry[]>([]);
+  const [entries, setEntries] = useState<LogEntry[]>([]);
+  const [typeFilter, setTypeFilter] = useState('all');
   const [sort, setSort] = useState<'asc' | 'desc'>('desc');
+  const [loading, setLoading] = useState(true);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   function getToken() { return typeof window !== 'undefined' ? sessionStorage.getItem('adminToken') : null; }
 
-  useEffect(() => {
+  async function fetchLogs() {
     const token = getToken();
     if (!token) { router.replace('/admin/login'); return; }
-    fetch('/api/admin/audit-log', { headers: { Authorization: `Bearer ${token}` } })
-      .then((r) => r.ok ? r.json() : []).then(setEntries);
-  }, []);
+    const res = await fetch(`/api/admin/audit-log?type=${typeFilter}&sort=${sort}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    });
+    if (res.status === 401) { router.replace('/admin/login'); return; }
+    if (res.ok) {
+      setEntries(await res.json());
+      setLastUpdated(new Date());
+    }
+    setLoading(false);
+  }
 
-  const sorted = [...entries].sort((a, b) => {
-    const diff = new Date(a.performedAt).getTime() - new Date(b.performedAt).getTime();
-    return sort === 'asc' ? diff : -diff;
-  });
+  useEffect(() => {
+    setLoading(true);
+    fetchLogs();
+  }, [typeFilter, sort]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const actionLabel: Record<string, string> = { delete_student: '🗑 Delete', reset_progress: '↺ Reset', event_reset: '⚠ Event Reset' };
+  // Auto-refresh every 5s
+  useEffect(() => {
+    const id = setInterval(fetchLogs, 5000);
+    return () => clearInterval(id);
+  }, [typeFilter, sort]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const counts: Record<string, number> = { all: entries.length };
+  for (const e of entries) {
+    counts[e.type] = (counts[e.type] ?? 0) + 1;
+  }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <nav className="bg-gray-800 text-white px-4 py-3 flex gap-4 text-sm">
-        <a href="/admin/dashboard" className="hover:text-blue-300">Dashboard</a>
-        <a href="/admin/audit-log" className="text-blue-300">Audit Log</a>
-      </nav>
-      <main className="p-6 max-w-5xl mx-auto">
-        <div className="flex items-center justify-between mb-4">
-          <h1 className="text-2xl font-bold text-gray-800">Audit Log</h1>
-          <button onClick={() => setSort((s) => s === 'asc' ? 'desc' : 'asc')} className="text-sm bg-white border px-3 py-1.5 rounded hover:bg-gray-50">
-            Sort: {sort === 'desc' ? 'Newest first' : 'Oldest first'}
+    <AdminLayout
+      title="Audit Log"
+      headerRight={
+        <div className="flex items-center gap-2">
+          <p className="text-gray-500 text-xs hidden md:block">
+            {lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()}` : 'Loading…'}
+          </p>
+          <button
+            onClick={() => setSort((s) => (s === 'desc' ? 'asc' : 'desc'))}
+            className="bg-gray-800 border border-gray-700 text-gray-400 text-xs px-3 py-1.5 rounded-lg hover:bg-gray-700 transition-colors"
+          >
+            {sort === 'desc' ? '↓ Newest first' : '↑ Oldest first'}
           </button>
         </div>
-        <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 border-b">
-              <tr>
-                {['Timestamp', 'Student', 'Phone', 'Stage', 'Action', 'Performed By'].map((h) => (
-                  <th key={h} className="px-3 py-2 text-left text-xs font-semibold text-gray-500">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {sorted.map((e) => (
-                <tr key={e.id} className="border-b hover:bg-gray-50">
-                  <td className="px-3 py-2 text-gray-400 text-xs">{new Date(e.performedAt).toLocaleString()}</td>
-                  <td className="px-3 py-2 font-medium">{e.participantName}</td>
-                  <td className="px-3 py-2 text-gray-500">{e.participantPhone}</td>
-                  <td className="px-3 py-2">{e.stageAtDeletion}</td>
-                  <td className="px-3 py-2">{actionLabel[e.action] ?? e.action}</td>
-                  <td className="px-3 py-2 text-gray-500">{e.performedBy}</td>
-                </tr>
-              ))}
-              {sorted.length === 0 && <tr><td colSpan={6} className="px-4 py-4 text-center text-gray-400">No audit entries.</td></tr>}
-            </tbody>
-          </table>
+      }
+    >
+      <div className="max-w-5xl space-y-4">
+        {/* Filter tabs */}
+        <div className="flex gap-1.5 flex-wrap">
+          {FILTER_TABS.map(({ key, label }) => (
+            <button
+              key={key}
+              onClick={() => setTypeFilter(key)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-colors ${
+                typeFilter === key
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white'
+              }`}
+            >
+              {label}
+              <span className="ml-1 opacity-60">
+                ({key === 'all' ? entries.length : (counts[key] ?? 0)})
+              </span>
+            </button>
+          ))}
         </div>
-      </main>
-    </div>
+
+        {/* Log entries */}
+        {loading ? (
+          <div className="flex justify-center py-16">
+            <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : entries.length === 0 ? (
+          <div className="text-center py-16 text-gray-600">
+            <p className="text-4xl mb-3">📋</p>
+            <p className="text-sm">No log entries yet for this filter.</p>
+          </div>
+        ) : (
+          <div className="bg-gray-900 border border-gray-700 rounded-2xl overflow-hidden shadow-xl">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-700 bg-gray-800/60">
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider w-36">Timestamp</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider w-36">Type</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">Details</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider w-28">By</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {entries.map((e) => {
+                    const cfg = TYPE_CONFIG[e.type] ?? { label: e.type, color: 'bg-gray-700 text-gray-300 border-gray-600', icon: '•' };
+                    return (
+                      <tr key={e.id} className="border-b border-gray-800 hover:bg-gray-800/30 transition-colors">
+                        <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">
+                          <p>{new Date(e.timestamp).toLocaleDateString()}</p>
+                          <p>{new Date(e.timestamp).toLocaleTimeString()}</p>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium border inline-flex items-center gap-1 ${cfg.color}`}>
+                            <span>{cfg.icon}</span>
+                            <span>{cfg.label}</span>
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <p className="text-white text-sm font-medium">{e.summary}</p>
+                          <p className="text-gray-500 text-xs mt-0.5">{e.detail}</p>
+                        </td>
+                        <td className="px-4 py-3 text-gray-500 text-xs">
+                          {e.performedBy}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+    </AdminLayout>
   );
 }

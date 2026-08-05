@@ -33,8 +33,11 @@ export const accessCodeSchema = z
 /** UUID v4 */
 export const uuidSchema = z.string().uuid();
 
-/** ISO 8601 date-time string */
-export const isoDateSchema = z.string().datetime({ offset: true });
+/** ISO 8601 date-time string — accepts any valid ISO string including Z suffix */
+export const isoDateSchema = z.string().refine(
+  (s) => !isNaN(new Date(s).getTime()),
+  { message: 'Must be a valid date-time string' }
+);
 
 // ─── Domain Types ──────────────────────────────────────────────────────────────
 

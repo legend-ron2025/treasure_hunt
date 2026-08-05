@@ -14,11 +14,22 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Participant not found.' }, { status: 404 });
   }
 
+  // If current_stage has advanced to 6, ensure status is marked completed
+  let status = participant.status as 'active' | 'completed' | 'cancelled';
+  if (participant.current_stage >= 6 && status === 'active') {
+    // Lazily mark completed (the advance may have missed the status update)
+    await db
+      .update(participants)
+      .set({ status: 'completed' })
+      .where(eq(participants.id, participant.id));
+    status = 'completed';
+  }
+
   const body: StudentMeResponse = {
     participantId: participant.id,
     name: participant.name,
     currentStage: participant.current_stage,
-    status: participant.status as 'active' | 'completed' | 'cancelled',
+    status,
   };
 
   return NextResponse.json(body);

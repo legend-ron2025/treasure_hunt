@@ -62,33 +62,29 @@ export async function verifyAccessCode(
 
 /**
  * Record stage completion and advance participant to next stage.
- * Atomic: inserts stage_completion row + updates participants.current_stage.
- * Idempotent: if the stage_completion row already exists, skips insert.
- * Retries up to 3 times on transient write failure.
+ * After stage 5 completes, marks the participant as 'completed'.
  */
 export async function advanceParticipantStage(
   participantId: string,
   stageNumber: number,
 ): Promise<void> {
   const nextStage = stageNumber + 1; // 6 = fully completed
+  const isFinished = stageNumber === 5;
 
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      // Insert completion record (idempotent via onConflictDoNothing)
       await db
         .insert(stageCompletions)
-        .values({
-          participant_id: participantId,
-          stage_number: stageNumber,
-        })
+        .values({ participant_id: participantId, stage_number: stageNumber })
         .onConflictDoNothing();
 
-      // Advance current_stage only if participant is still on stageNumber
-      // (guards against double-advance on concurrent requests)
       await db
         .update(participants)
-        .set({ current_stage: nextStage })
+        .set({
+          current_stage: nextStage,
+          ...(isFinished ? { status: 'completed' } : {}),
+        })
         .where(
           and(
             eq(participants.id, participantId),
@@ -96,14 +92,12 @@ export async function advanceParticipantStage(
           ),
         );
 
-      return; // success
+      return;
     } catch (err) {
       lastError = err;
-      // Brief pause before retry (50 ms, 100 ms, 150 ms)
       await new Promise((r) => setTimeout(r, 50 * (attempt + 1)));
     }
   }
-
   throw lastError;
 }
 

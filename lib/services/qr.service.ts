@@ -1,39 +1,46 @@
 /**
  * lib/services/qr.service.ts
- * Requirements: 16.2–16.8
+ *
+ * Generates an A4-sized (2480×3508 @ 300 DPI) styled QR card as an SVG.
+ *
+ * The college logo is fetched and embedded as a faded watermark BEHIND the QR
+ * at 15% opacity (60% of QR size, centred).
+ *
+ * Bottom layout after QR:
+ *   - "Access Code" label + large monospace value
+ *   - Wide yellow box: "Remember this word!" + large fragment value
  */
+
 import QRCode from 'qrcode';
-import sharp from 'sharp';
-import jsQR from 'jsqr';
 
-const QR_SIZE = 1200;
-const CARD_WIDTH = 1200;
-const CARD_HEIGHT = 1600;
+const CARD_W = 2480;
+const CARD_H = 3508;
+const QR_SIZE = 1800;
+const QR_X   = Math.floor((CARD_W - QR_SIZE) / 2);   // 340
+const QR_Y   = 420;
+const QR_BOT  = QR_Y + QR_SIZE;                       // 2220
 
-export async function generateQrPng(url: string): Promise<Buffer> {
-  const ecLevels: Array<'Q' | 'H' | 'M'> = ['Q', 'H', 'M'];
-  let lastError: Error | null = null;
+const LOGO_URL = 'https://i.postimg.cc/c1cHCbHX/Whats-App-Image-2026-07-31-at-6-24-50-PM.jpg';
 
-  for (const level of ecLevels) {
-    try {
-      const qrBuffer = await QRCode.toBuffer(url, {
-        type: 'png', width: QR_SIZE, margin: 2,
-        color: { dark: '#003087', light: '#ffffff' },
-        errorCorrectionLevel: level,
-      });
+function esc(s: string) {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
 
-      // Verify decodability
-      const { data, info } = await sharp(qrBuffer).raw().toBuffer({ resolveWithObject: true });
-      const result = jsQR(new Uint8ClampedArray(data), info.width, info.height);
-      if (result && result.data === url) {
-        return qrBuffer;
-      }
-      throw new Error(`QR decodability check failed for level ${level}`);
-    } catch (err: any) {
-      lastError = err;
-    }
+async function fetchLogoDataUrl(): Promise<string | null> {
+  try {
+    const res = await fetch(LOGO_URL, { cache: 'force-cache' });
+    if (!res.ok) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    const ct  = res.headers.get('content-type') ?? 'image/jpeg';
+    return `data:${ct};base64,${buf.toString('base64')}`;
+  } catch {
+    return null;
   }
-  throw lastError ?? new Error('QR generation failed after 3 attempts');
 }
 
 export async function generateQrCard(
@@ -42,28 +49,104 @@ export async function generateQrCard(
     collegeName: string;
     accessCode?: string;
     wordFragment?: string;
-    label?: string; // e.g. "Scan to Register" for registration QR
-  }
+    isRegistration?: boolean;
+  },
 ): Promise<Buffer> {
-  const qrBuffer = await generateQrPng(url);
+  // 1. Generate QR as base64 data-URL
+  const qrDataUrl: string = await QRCode.toDataURL(url, {
+    type: 'image/png',
+    width: QR_SIZE,
+    margin: 2,
+    color: { dark: '#003087', light: '#ffffff' },
+    errorCorrectionLevel: 'H',
+  });
 
-  // Build card: white background 1200x1600
-  const textLines: Array<{ text: string; size: number; y: number; color: string }> = [
-    { text: options.collegeName, size: 48, y: 80, color: '#003087' },
-    { text: options.label ?? (options.accessCode ? `Code: ${options.accessCode}` : ''), size: 40, y: 1420, color: '#333333' },
-  ];
-  if (options.wordFragment) {
-    textLines.push({ text: `Fragment: ${options.wordFragment}`, size: 36, y: 1480, color: '#666666' });
+  // 2. Fetch college logo for watermark (best-effort, non-blocking)
+  const logoDataUrl = await fetchLogoDataUrl();
+
+  const collegeName  = esc(options.collegeName);
+  const accessCode   = options.accessCode   ? esc(options.accessCode)   : null;
+  const wordFragment = options.wordFragment ? esc(options.wordFragment) : null;
+  const isReg        = options.isRegistration === true;
+
+  // ── Logo watermark (behind QR) ───────────────────────────────────────────
+  const LOGO_SIZE = Math.floor(QR_SIZE * 0.60);   // 1080 px
+  const LOGO_X    = QR_X + Math.floor((QR_SIZE - LOGO_SIZE) / 2);
+  const LOGO_Y    = QR_Y + Math.floor((QR_SIZE - LOGO_SIZE) / 2);
+
+  const logoSvg = logoDataUrl
+    ? `<image href="${logoDataUrl}"
+         x="${LOGO_X}" y="${LOGO_Y}"
+         width="${LOGO_SIZE}" height="${LOGO_SIZE}"
+         preserveAspectRatio="xMidYMid meet"
+         opacity="0.15"/>`
+    : '';
+
+  // ── Bottom content ────────────────────────────────────────────────────────
+  let bottomSvg = '';
+
+  if (isReg) {
+    bottomSvg = `
+      <text x="${CARD_W / 2}" y="${QR_BOT + 200}"
+        font-family="Arial, Helvetica, sans-serif"
+        font-size="110" font-weight="bold"
+        fill="#003087" text-anchor="middle">Scan to Register</text>`;
+  } else {
+    if (accessCode) {
+      bottomSvg += `
+        <text x="${CARD_W / 2}" y="${QR_BOT + 110}"
+          font-family="Arial, Helvetica, sans-serif"
+          font-size="80" fill="#666666" text-anchor="middle">Access Code</text>
+        <text x="${CARD_W / 2}" y="${QR_BOT + 320}"
+          font-family="'Courier New', Courier, monospace"
+          font-size="210" font-weight="bold"
+          fill="#111111" text-anchor="middle" letter-spacing="18">${accessCode}</text>
+        <line x1="${CARD_W / 2 - 600}" y1="${QR_BOT + 380}"
+              x2="${CARD_W / 2 + 600}" y2="${QR_BOT + 380}"
+          stroke="#cccccc" stroke-width="5"/>`;
+    }
+
+    if (wordFragment) {
+      // Wide box — 1400 wide × 380 tall — plenty of room for two text lines
+      const BOX_W  = 1400;
+      const BOX_H  = 380;
+      const BOX_X  = (CARD_W - BOX_W) / 2;
+      const BOX_Y  = QR_BOT + 430;
+      const LABEL_Y = BOX_Y + 120;
+      const VALUE_Y = BOX_Y + 300;
+
+      bottomSvg += `
+        <rect x="${BOX_X}" y="${BOX_Y}"
+          width="${BOX_W}" height="${BOX_H}" rx="40"
+          fill="#fff8e1" stroke="#f0ad4e" stroke-width="8"/>
+        <text x="${CARD_W / 2}" y="${LABEL_Y}"
+          font-family="Arial, Helvetica, sans-serif"
+          font-size="82" fill="#7d5a00" text-anchor="middle">Remember this word!</text>
+        <text x="${CARD_W / 2}" y="${VALUE_Y}"
+          font-family="'Courier New', Courier, monospace"
+          font-size="160" font-weight="bold"
+          fill="#7d5a00" text-anchor="middle" letter-spacing="14">${wordFragment}</text>`;
+    }
   }
 
-  // Create card using sharp: white canvas + QR image composited
-  const card = sharp({
-    create: { width: CARD_WIDTH, height: CARD_HEIGHT, channels: 4, background: { r: 255, g: 255, b: 255, alpha: 1 } },
-  })
-    .png()
-    .composite([
-      { input: qrBuffer, top: 180, left: 0 },
-    ]);
+  // ── Build SVG ────────────────────────────────────────────────────────────
+  const svg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="${CARD_W}" height="${CARD_H}" viewBox="0 0 ${CARD_W} ${CARD_H}">
+  <rect width="${CARD_W}" height="${CARD_H}" fill="white"/>
+  <rect x="0" y="0" width="${CARD_W}" height="22" fill="#003087"/>
+  <text x="${CARD_W / 2}" y="215"
+    font-family="Arial, Helvetica, sans-serif" font-size="110" font-weight="bold"
+    fill="#003087" text-anchor="middle">${collegeName}</text>
+  <text x="${CARD_W / 2}" y="335"
+    font-family="Arial, Helvetica, sans-serif" font-size="62" fill="#666666"
+    text-anchor="middle">Treasure Hunt Event</text>
+  ${logoSvg}
+  <image href="${qrDataUrl}" x="${QR_X}" y="${QR_Y}"
+    width="${QR_SIZE}" height="${QR_SIZE}" image-rendering="crisp-edges"/>
+  ${bottomSvg}
+  <rect x="0" y="${CARD_H - 22}" width="${CARD_W}" height="22" fill="#003087"/>
+</svg>`;
 
-  return card.toBuffer();
+  return Buffer.from(svg, 'utf-8');
 }

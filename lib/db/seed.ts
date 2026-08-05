@@ -12,7 +12,6 @@
  * Requires DATABASE_URL to be set in the environment (or .env.local).
  */
 
-import 'dotenv/config';
 import { neon } from '@neondatabase/serverless';
 import { drizzle } from 'drizzle-orm/neon-http';
 import { stages, registrationQr, eventConfig } from './schema';

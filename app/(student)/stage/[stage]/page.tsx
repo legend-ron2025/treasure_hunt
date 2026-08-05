@@ -34,7 +34,25 @@ export default function StagePage() {
       .catch((e) => {
         if (e?.redirect) {
           // Redirect to correct stage or handle cancellation
-          router.replace('/register');
+          // We need participant's current_stage to redirect properly — fetch it
+          const t = localStorage.getItem('studentToken');
+          if (t) {
+            fetch('/api/student/me', { headers: { Authorization: `Bearer ${t}` } })
+              .then((r) => r.ok ? r.json() : null)
+              .then((me) => {
+                if (!me || me.status === 'cancelled') { router.replace('/register'); return; }
+                if (me.currentStage >= 6 || me.status === 'completed') { router.replace('/congratulations'); return; }
+                // Already past this stage — go to next pending stage QR scan
+                if (me.currentStage > stageNumber) {
+                  router.replace(`/qr/scan/${me.currentStage}`);
+                } else {
+                  router.replace(`/stage/${me.currentStage}`);
+                }
+              })
+              .catch(() => router.replace('/register'));
+          } else {
+            router.replace('/register');
+          }
         } else {
           setApiError('Failed to load stage content.');
           setLoading(false);
@@ -45,20 +63,20 @@ export default function StagePage() {
     const hb = setInterval(() => {
       const t = localStorage.getItem('studentToken');
       if (t && !document.hidden) {
-        navigator.sendBeacon('/api/student/heartbeat', new Blob([JSON.stringify({})], { type: 'application/json' }));
+        navigator.sendBeacon('/api/student/heartbeat', new Blob([JSON.stringify({ token: t })], { type: 'application/json' }));
       }
     }, 2 * 60 * 1000);
 
     function beforeUnload() {
       const t = localStorage.getItem('studentToken');
-      if (t) navigator.sendBeacon('/api/student/dropout', new Blob([JSON.stringify({ reason: 'dropout_tab_close' })], { type: 'application/json' }));
+      if (t) navigator.sendBeacon('/api/student/dropout', new Blob([JSON.stringify({ token: t, reason: 'dropout_tab_close' })], { type: 'application/json' }));
     }
     function visChange() {
       const t = localStorage.getItem('studentToken');
       if (!t) return;
       if (document.hidden) {
         visibilityTimerRef.current = setTimeout(() => {
-          navigator.sendBeacon('/api/student/dropout', new Blob([JSON.stringify({ reason: 'dropout_navigation' })], { type: 'application/json' }));
+          navigator.sendBeacon('/api/student/dropout', new Blob([JSON.stringify({ token: t, reason: 'dropout_navigation' })], { type: 'application/json' }));
         }, 5000);
       } else {
         if (visibilityTimerRef.current) { clearTimeout(visibilityTimerRef.current); visibilityTimerRef.current = null; }

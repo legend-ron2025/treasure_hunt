@@ -2,7 +2,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import CollegeHeader from '@/components/CollegeHeader';
-import SessionWarningBanner from '@/components/SessionWarningBanner';
 
 export default function RegistrationSuccess() {
   const router = useRouter();
@@ -12,70 +11,43 @@ export default function RegistrationSuccess() {
 
   useEffect(() => {
     const token = localStorage.getItem('studentToken');
-    if (!token) {
-      router.replace('/register');
-      return;
-    }
+    if (!token) { router.replace('/register'); return; }
 
-    // Fetch student info and stage 1 hint
     Promise.all([
-      fetch('/api/student/me', {
-        headers: { Authorization: `Bearer ${token}` },
-      }).then((r) => (r.ok ? r.json() : null)),
-      fetch('/api/student/stage/1', {
-        headers: { Authorization: `Bearer ${token}` },
-      }).then((r) => (r.ok ? r.json() : null)),
-    ])
-      .then(([me, stage]) => {
-        if (me?.name) setStudentName(me.name);
-        if (stage?.hintText) setHint(stage.hintText);
-      })
-      .catch(() => {});
+      fetch('/api/student/me', { headers: { Authorization: `Bearer ${token}` } })
+        .then((r) => (r.ok ? r.json() : null)),
+      fetch('/api/student/stage/1', { headers: { Authorization: `Bearer ${token}` } })
+        .then((r) => (r.ok ? r.json() : null)),
+    ]).then(([me, stage]) => {
+      if (me?.name) setStudentName(me.name);
+      if (stage?.hintText) setHint(stage.hintText);
+    }).catch(() => {});
 
-    // ── Heartbeat every 2 minutes ────────────────────────────────────────────
+    // Heartbeat every 2 minutes
     const heartbeatInterval = setInterval(() => {
       const t = localStorage.getItem('studentToken');
       if (t && !document.hidden) {
-        navigator.sendBeacon(
-          '/api/student/heartbeat',
-          new Blob([JSON.stringify({})], { type: 'application/json' }),
-        );
+        navigator.sendBeacon('/api/student/heartbeat',
+          new Blob([JSON.stringify({ token: t })], { type: 'application/json' }));
       }
     }, 2 * 60 * 1000);
 
-    // ── Dropout beacon on tab close ──────────────────────────────────────────
     function handleBeforeUnload() {
       const t = localStorage.getItem('studentToken');
-      if (t) {
-        navigator.sendBeacon(
-          '/api/student/dropout',
-          new Blob(
-            [JSON.stringify({ reason: 'dropout_tab_close' })],
-            { type: 'application/json' },
-          ),
-        );
-      }
+      if (t) navigator.sendBeacon('/api/student/dropout',
+        new Blob([JSON.stringify({ token: t, reason: 'dropout_tab_close' })], { type: 'application/json' }));
     }
 
-    // ── Dropout beacon when hidden > 5 s (navigation away) ──────────────────
     function handleVisibilityChange() {
       const t = localStorage.getItem('studentToken');
       if (!t) return;
       if (document.hidden) {
         visibilityTimerRef.current = setTimeout(() => {
-          navigator.sendBeacon(
-            '/api/student/dropout',
-            new Blob(
-              [JSON.stringify({ reason: 'dropout_navigation' })],
-              { type: 'application/json' },
-            ),
-          );
+          navigator.sendBeacon('/api/student/dropout',
+            new Blob([JSON.stringify({ token: t, reason: 'dropout_navigation' })], { type: 'application/json' }));
         }, 5000);
       } else {
-        if (visibilityTimerRef.current) {
-          clearTimeout(visibilityTimerRef.current);
-          visibilityTimerRef.current = null;
-        }
+        if (visibilityTimerRef.current) { clearTimeout(visibilityTimerRef.current); visibilityTimerRef.current = null; }
       }
     }
 
@@ -96,7 +68,7 @@ export default function RegistrationSuccess() {
 
       <main className="flex-1 flex items-center justify-center px-4 py-8">
         <div className="w-full max-w-sm bg-white rounded-xl shadow-md p-6 text-center space-y-5">
-          <div className="text-4xl" aria-hidden="true">🎉</div>
+          <div className="text-4xl animate-bounce" aria-hidden="true">🎉</div>
 
           <div>
             <h2 className="text-xl font-bold text-gray-800">
@@ -121,7 +93,64 @@ export default function RegistrationSuccess() {
           </p>
         </div>
       </main>
-      <SessionWarningBanner />
+
+      {/* Animated Warning Banner */}
+      <div className="fixed bottom-0 left-0 right-0 z-50">
+        {/* Pulsing glow border */}
+        <div className="relative bg-red-600 border-t-4 border-red-400 px-4 py-4 shadow-2xl animate-pulse-warning">
+          {/* Crazy animated icons strip */}
+          <div className="flex justify-center gap-3 mb-2 overflow-hidden">
+            {['⚠️','🚫','💀','⚠️','🔴','💥','⚠️','🚫','💀','⚠️'].map((icon, i) => (
+              <span
+                key={i}
+                className="text-xl"
+                style={{
+                  animation: `bounce 0.6s infinite`,
+                  animationDelay: `${i * 0.06}s`,
+                  display: 'inline-block',
+                }}
+              >
+                {icon}
+              </span>
+            ))}
+          </div>
+
+          <div className="text-center">
+            <p className="text-white font-extrabold text-base uppercase tracking-wide leading-tight">
+              ⚠️ IMPORTANT WARNING — Do NOT close this tab or leave this page!
+            </p>
+            <p className="text-red-100 text-xs mt-1 leading-relaxed">
+              If you quit, navigate away, or close the browser during the event,
+              your registration will be <span className="font-bold text-white underline">permanently cancelled</span> and
+              you will <span className="font-bold text-yellow-300">not be allowed to re-register</span> or participate in this event again.
+            </p>
+          </div>
+
+          {/* Shimmer overlay */}
+          <div
+            className="absolute inset-0 pointer-events-none"
+            style={{
+              background: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.08) 50%, transparent 100%)',
+              animation: 'shimmer 2s infinite',
+              backgroundSize: '200% 100%',
+            }}
+          />
+        </div>
+      </div>
+
+      {/* Spacer so content doesn't hide behind fixed banner */}
+      <div className="h-32" />
+
+      <style jsx>{`
+        @keyframes shimmer {
+          0% { background-position: -200% 0; }
+          100% { background-position: 200% 0; }
+        }
+        @keyframes pulse-warning {
+          0%, 100% { box-shadow: 0 -4px 20px rgba(220, 38, 38, 0.5); }
+          50% { box-shadow: 0 -4px 40px rgba(220, 38, 38, 0.9); }
+        }
+      `}</style>
     </div>
   );
 }

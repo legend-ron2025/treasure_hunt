@@ -9,7 +9,7 @@
  */
 
 import { db } from '../db';
-import { participants, banList, stageCompletions, studentSessions } from '../db/schema';
+import { participants, banList, stageCompletions, studentSessions, deletionAuditLog } from '../db/schema';
 import { eq, and, ne, or, sql } from 'drizzle-orm';
 import { createStudentJwt } from './session.service';
 import { registerRequestSchema, type RegisterResponse } from '../types';
@@ -196,23 +196,35 @@ export async function cancelParticipant(
   participantId: string,
   reason: import('../types').CancelReason,
 ): Promise<void> {
+  // Fetch current stage for audit log
+  const rows = await db.select().from(participants).where(eq(participants.id, participantId)).limit(1);
+  const p = rows[0];
+
+  // Write audit log entry before cancelling
+  if (p) {
+    await db.insert(deletionAuditLog).values({
+      participant_name: p.name,
+      participant_phone: p.phone,
+      stage_at_deletion: p.current_stage,
+      action: reason,
+      performed_by: 'system',
+      extra_info: `Auto-cancelled: ${reason}`,
+    }).catch(() => {}); // don't block cancellation if audit write fails
+  }
+
   // 1. Mark participant as cancelled
   await db
     .update(participants)
-    .set({
-      status: 'cancelled',
-      cancelled_at: new Date(),
-      cancel_reason: reason,
-    })
+    .set({ status: 'cancelled', cancelled_at: new Date(), cancel_reason: reason })
     .where(eq(participants.id, participantId));
 
-  // 2. Deactivate all their sessions (JWT invalidation)
+  // 2. Deactivate all their sessions
   await db
     .update(studentSessions)
     .set({ is_active: false })
     .where(eq(studentSessions.participant_id, participantId));
 
-  // 3. Delete stage completion records (void progress)
+  // 3. Delete stage completion records
   await db
     .delete(stageCompletions)
     .where(eq(stageCompletions.participant_id, participantId));

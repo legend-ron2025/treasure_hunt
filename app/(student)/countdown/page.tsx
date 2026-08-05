@@ -1,138 +1,227 @@
 'use client';
-import { useEffect, useState, useRef } from 'react';
+/**
+ * Countdown page — shown when a QR is scanned before the event starts.
+ *
+ * Key behaviors:
+ * - Polls /api/time every 10s to pick up schedule changes quickly
+ * - Listens for localStorage 'scheduleUpdated' from the admin schedule page
+ * - When timer hits zero → redirects to /register immediately
+ * - /register bounces back here if event still not active (safe loop)
+ * - redirectedRef prevents double-redirect
+ */
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import CollegeHeader from '@/components/CollegeHeader';
-import SessionWarningBanner from '@/components/SessionWarningBanner';
 import type { ServerTimeResponse } from '@/lib/types';
 
-interface TimeLeft { days: number; hours: number; minutes: number; seconds: number; }
+interface TimeLeft {
+  days: number;
+  hours: number;
+  minutes: number;
+  seconds: number;
+}
 
-function calcTimeLeft(targetMs: number, nowMs: number): TimeLeft {
-  const diff = Math.max(0, targetMs - nowMs);
+function calcTimeLeft(targetMs: number, serverAnchorMs: number, clientAnchorMs: number): TimeLeft {
+  const clientElapsed = Date.now() - clientAnchorMs;
+  const effectiveNow = serverAnchorMs + clientElapsed;
+  const diff = Math.max(0, targetMs - effectiveNow);
   return {
-    days: Math.floor(diff / 86_400_000),
-    hours: Math.floor((diff % 86_400_000) / 3_600_000),
-    minutes: Math.floor((diff % 3_600_000) / 60_000),
-    seconds: Math.floor((diff % 60_000) / 1_000),
+    days:    Math.floor(diff / 86_400_000),
+    hours:   Math.floor((diff % 86_400_000) / 3_600_000),
+    minutes: Math.floor((diff % 3_600_000)  / 60_000),
+    seconds: Math.floor((diff % 60_000)     / 1_000),
   };
 }
 
 export default function CountdownPage() {
   const router = useRouter();
-  const [timeLeft, setTimeLeft] = useState<TimeLeft | null>(null);
-  const [status, setStatus] = useState<'loading' | 'before' | 'active' | 'ended' | 'error'>('loading');
-  const [message, setMessage] = useState('');
-  const startMsRef = useRef<number | null>(null);
-  const serverOffsetRef = useRef(0); // client drift correction
-  const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  async function fetchServerTime() {
+  // startMs as STATE — changing it triggers the tick useEffect to restart
+  const [startMs,  setStartMs]  = useState<number | null>(null);
+  const [status,   setStatus]   = useState<'loading' | 'before' | 'active' | 'ended' | 'error'>('loading');
+  const [message,  setMessage]  = useState('');
+  const [timeLeft, setTimeLeft] = useState<TimeLeft | null>(null);
+
+  // Server-time anchor refs (no re-render needed, just baseline for arithmetic)
+  const serverAnchorMsRef = useRef<number>(Date.now());
+  const clientAnchorMsRef = useRef<number>(Date.now());
+
+  const tickRef       = useRef<ReturnType<typeof setInterval> | null>(null);
+  const redirectedRef = useRef(false);
+
+  // ─── Safe redirect ─────────────────────────────────────────────────────────
+  const doRedirect = useCallback(() => {
+    if (redirectedRef.current) return;
+    redirectedRef.current = true;
+    if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null; }
+    router.replace('/register');
+  }, [router]);
+
+  // ─── Fetch /api/time ───────────────────────────────────────────────────────
+  const fetchServerTime = useCallback(async () => {
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
-      const res = await fetch('/api/time', { signal: controller.signal });
-      clearTimeout(timeout);
-      if (!res.ok) throw new Error('Server error');
+      const clientFetchTime = Date.now();
+      const res = await fetch('/api/time', {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
       const data: ServerTimeResponse = await res.json();
-      const clientNow = Date.now();
-      const serverNow = new Date(data.serverTime).getTime();
-      serverOffsetRef.current = serverNow - clientNow;
+
+      // Update server-time anchor so tick stays accurate after re-syncs
+      serverAnchorMsRef.current = new Date(data.serverTime).getTime();
+      clientAnchorMsRef.current = clientFetchTime;
 
       if (data.eventStatus === 'active') {
-        setStatus('active');
-        router.replace('/register');
+        doRedirect();
         return;
       }
+
       if (data.eventStatus === 'ended') {
         setStatus('ended');
         setMessage('The event has ended. Thank you for participating!');
         return;
       }
+
       // 'before'
       if (!data.startTime) {
+        setStartMs(null);
         setStatus('before');
         setMessage('The event has not been scheduled yet. Please check back later.');
         return;
       }
-      startMsRef.current = new Date(data.startTime).getTime();
-      setStatus('before');
-    } catch {
-      setStatus('error');
-      setMessage('Could not connect to the server. Please check your connection and refresh.');
-    }
-  }
 
+      const newStartMs = new Date(data.startTime).getTime();
+      // Always update startMs — even if the admin changed the schedule
+      setStartMs(newStartMs);
+      setStatus('before');
+      setMessage('');
+    } catch {
+      // On error keep existing state; only show error if still loading
+      setStatus((prev) => (prev === 'loading' ? 'error' : prev));
+      if (status === 'loading') {
+        setMessage('Could not connect to the server. Please try again.');
+      }
+    }
+  }, [doRedirect, status]);
+
+  // ─── Initial fetch + storage listener ─────────────────────────────────────
   useEffect(() => {
     fetchServerTime();
-    // Re-sync every 60 seconds
-    const syncInterval = setInterval(fetchServerTime, 60_000);
-    return () => clearInterval(syncInterval);
-  }, []);
 
-  // Tick every second
+    // When the admin saves a schedule from the same browser, pick it up instantly
+    function onStorage(e: StorageEvent) {
+      if (e.key === 'scheduleUpdated') fetchServerTime();
+    }
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ─── 10-second polling — picks up schedule changes within 10s ─────────────
   useEffect(() => {
-    if (status !== 'before' || startMsRef.current === null) return;
-    tickRef.current = setInterval(() => {
-      const now = Date.now() + serverOffsetRef.current;
-      const tl = calcTimeLeft(startMsRef.current!, now);
+    const id = setInterval(fetchServerTime, 10_000);
+    return () => clearInterval(id);
+  }, [fetchServerTime]);
+
+  // ─── Tick — restarts whenever startMs changes ──────────────────────────────
+  useEffect(() => {
+    if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null; }
+
+    if (status !== 'before' || startMs === null) return;
+
+    function tick() {
+      const tl = calcTimeLeft(startMs!, serverAnchorMsRef.current, clientAnchorMsRef.current);
       setTimeLeft(tl);
       if (tl.days === 0 && tl.hours === 0 && tl.minutes === 0 && tl.seconds === 0) {
-        clearInterval(tickRef.current!);
-        fetchServerTime(); // re-check — may now be active
+        doRedirect();
       }
-    }, 1000);
-    return () => { if (tickRef.current) clearInterval(tickRef.current); };
-  }, [status]);
+    }
+
+    tick();
+    tickRef.current = setInterval(tick, 1000);
+    return () => { if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null; } };
+  }, [startMs, status, doRedirect]);
 
   const pad = (n: number) => String(n).padStart(2, '0');
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    <div className="min-h-screen bg-gradient-to-br from-blue-950 via-blue-900 to-indigo-900 flex flex-col">
       <CollegeHeader />
       <main className="flex-1 flex items-center justify-center px-4 py-8">
-        <div className="w-full max-w-sm bg-white rounded-xl shadow-md p-6 text-center space-y-5">
-          {status === 'loading' && <p className="text-gray-500">Checking event status…</p>}
+        <div className="w-full max-w-md bg-white/10 backdrop-blur-sm rounded-3xl shadow-2xl p-8 text-center space-y-6 border border-white/20">
+
+          {status === 'loading' && (
+            <div className="space-y-4">
+              <div className="w-14 h-14 border-4 border-blue-300 border-t-transparent rounded-full animate-spin mx-auto" />
+              <p className="text-blue-200 text-sm">Checking event status…</p>
+            </div>
+          )}
 
           {status === 'error' && (
-            <>
-              <div className="text-4xl" aria-hidden="true">⚠️</div>
-              <p className="text-red-700 text-sm">{message}</p>
-            </>
+            <div className="space-y-4">
+              <div className="text-5xl">⚠️</div>
+              <p className="text-red-300 text-sm">{message}</p>
+              <button
+                onClick={() => fetchServerTime()}
+                className="bg-blue-600 text-white px-5 py-2.5 rounded-xl text-sm hover:bg-blue-700 transition-colors font-medium"
+              >
+                Retry
+              </button>
+            </div>
           )}
 
           {status === 'ended' && (
-            <>
-              <div className="text-4xl" aria-hidden="true">🏁</div>
-              <h2 className="text-xl font-bold text-gray-800">Event Ended</h2>
-              <p className="text-gray-600 text-sm">{message}</p>
-            </>
+            <div className="space-y-4">
+              <div className="text-6xl">🏁</div>
+              <h2 className="text-2xl font-bold text-white">Event Ended</h2>
+              <p className="text-blue-200 text-sm">{message}</p>
+            </div>
           )}
 
-          {status === 'before' && !timeLeft && (
-            <p className="text-gray-600 text-sm">{message || 'Calculating countdown…'}</p>
+          {status === 'before' && startMs === null && (
+            <div className="space-y-4">
+              <div className="text-5xl">🕐</div>
+              <h2 className="text-xl font-bold text-white">Coming Soon</h2>
+              <p className="text-blue-200 text-sm">
+                {message || 'The event has not been scheduled yet. Please check back later.'}
+              </p>
+              <p className="text-blue-400 text-xs">This page refreshes automatically every 10 seconds.</p>
+            </div>
           )}
 
-          {status === 'before' && timeLeft && (
-            <>
-              <h2 className="text-xl font-bold text-gray-800">Event Starting In</h2>
-              <div className="grid grid-cols-4 gap-2 mt-2" aria-live="polite" aria-label="Countdown timer">
+          {status === 'before' && startMs !== null && (
+            <div className="space-y-7">
+              <div>
+                <div className="text-5xl mb-3">🏆</div>
+                <h2 className="text-3xl font-bold text-white">Treasure Hunt</h2>
+                <p className="text-blue-300 text-sm mt-2 font-medium tracking-wide uppercase">Starting in</p>
+              </div>
+
+              <div className="grid grid-cols-4 gap-3" aria-live="polite" aria-label="Countdown timer">
                 {[
-                  { label: 'Days', value: timeLeft.days },
-                  { label: 'Hours', value: timeLeft.hours },
-                  { label: 'Mins', value: timeLeft.minutes },
-                  { label: 'Secs', value: timeLeft.seconds },
+                  { label: 'Days',  value: timeLeft?.days    ?? 0 },
+                  { label: 'Hours', value: timeLeft?.hours   ?? 0 },
+                  { label: 'Mins',  value: timeLeft?.minutes ?? 0 },
+                  { label: 'Secs',  value: timeLeft?.seconds ?? 0 },
                 ].map(({ label, value }) => (
-                  <div key={label} className="bg-blue-50 rounded-lg p-2">
-                    <p className="text-2xl font-bold text-blue-700 font-mono">{pad(value)}</p>
-                    <p className="text-xs text-blue-500">{label}</p>
+                  <div key={label} className="bg-white/20 backdrop-blur rounded-2xl p-3 border border-white/30 shadow-inner">
+                    <p className="text-4xl font-extrabold text-white font-mono tabular-nums tracking-tight">
+                      {pad(value)}
+                    </p>
+                    <p className="text-xs text-blue-300 mt-1 font-medium uppercase tracking-wider">{label}</p>
                   </div>
                 ))}
               </div>
-            </>
+
+              <p className="text-blue-300 text-xs">
+                You will be automatically redirected to registration when the event starts.
+              </p>
+            </div>
           )}
+
         </div>
       </main>
-      <SessionWarningBanner />
     </div>
   );
 }

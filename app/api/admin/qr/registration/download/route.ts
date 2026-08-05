@@ -13,7 +13,13 @@ export async function GET(request: NextRequest) {
   const row = rows[0];
   if (!row?.styled_qr_png) return NextResponse.json({ error: 'QR not generated yet.' }, { status: 404 });
 
-  return new NextResponse(new Uint8Array(row.styled_qr_png), {
-    headers: { 'Content-Type': 'image/png', 'Content-Disposition': 'attachment; filename="registration-qr.png"' },
+  const buf = row.styled_qr_png;
+  const isSvg = buf[0] === 0x3C;
+
+  return new NextResponse(new Uint8Array(buf), {
+    headers: {
+      'Content-Type': isSvg ? 'image/svg+xml' : 'image/png',
+      'Content-Disposition': `attachment; filename="registration-qr.${isSvg ? 'svg' : 'png'}"`,
+    },
   });
 }

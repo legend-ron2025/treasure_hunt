@@ -8,41 +8,90 @@ import { generateQrCard } from '@/lib/services/qr.service';
 export const dynamic = 'force-dynamic';
 
 const COLLEGE_NAME = 'RJMMsVishwakamal Mahavidhayal';
-const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL ?? '';
+
+/**
+ * Derive the public base URL from the incoming request.
+ * Falls back to NEXT_PUBLIC_BASE_URL env var, then to VERCEL_URL.
+ * This ensures QR codes encode the correct absolute URL whether running
+ * locally or on Vercel.
+ */
+function getBaseUrl(request: NextRequest): string {
+  // Explicit env override (set on Vercel to your custom domain)
+  const envUrl = process.env.NEXT_PUBLIC_BASE_URL;
+  if (envUrl && !envUrl.includes('localhost')) return envUrl.replace(/\/$/, '');
+
+  // Vercel system env
+  const vercelUrl = process.env.VERCEL_URL;
+  if (vercelUrl) return `https://${vercelUrl}`;
+
+  // Derive from incoming request host
+  const host = request.headers.get('host') ?? 'localhost:3000';
+  const proto = host.startsWith('localhost') ? 'http' : 'https';
+  return `${proto}://${host}`;
+}
 
 export async function POST(request: NextRequest) {
   const auth = await requireAdminAuth(request);
   if (isAuthError(auth)) return auth;
 
-  const errors: string[] = [];
+  const baseUrl = getBaseUrl(request);
+  console.log('[QR Generate] Base URL:', baseUrl);
 
-  // Generate registration QR
+  const errors: string[] = [];
+  const results: { type: string; url: string; success: boolean }[] = [];
+
+  // ── Registration QR ───────────────────────────────────────────────────────
   try {
-    const url = `${BASE_URL}/register`;
-    const card = await generateQrCard(url, { collegeName: COLLEGE_NAME, label: 'Scan to Register' });
-    await db.update(registrationQr).set({ styled_qr_png: card, qr_url: url, updated_at: new Date() }).where(eq(registrationQr.id, 1));
+    const url = `${baseUrl}/register`;
+    console.log('[QR Generate] Registration QR URL:', url);
+    const card = await generateQrCard(url, {
+      collegeName: COLLEGE_NAME,
+      isRegistration: true,
+    });
+    await db
+      .update(registrationQr)
+      .set({ styled_qr_png: card, qr_url: url, updated_at: new Date() })
+      .where(eq(registrationQr.id, 1));
+    results.push({ type: 'registration', url, success: true });
+    console.log('[QR Generate] Registration QR: OK');
   } catch (e: any) {
-    errors.push(`Registration QR: ${e.message}`);
+    const msg = `Registration QR: ${e?.message ?? String(e)}`;
+    errors.push(msg);
+    console.error('[QR Generate]', msg);
   }
 
-  // Generate puzzle QRs 1-5
-  const allStages = await db.select().from(stages);
+  // ── Puzzle QRs 1–5 ───────────────────────────────────────────────────────
+  const allStages = await db.select().from(stages).orderBy(stages.stage_number);
+
   for (const s of allStages) {
     try {
-      const url = `${BASE_URL}/stage/${s.stage_number}`;
+      // Always use the absolute URL based on the current host
+      const url = `${baseUrl}/stage/${s.stage_number}`;
+      console.log(`[QR Generate] Stage ${s.stage_number} QR URL:`, url);
       const card = await generateQrCard(url, {
         collegeName: COLLEGE_NAME,
         accessCode: s.access_code,
         wordFragment: s.word_fragment ?? undefined,
       });
-      await db.update(stages).set({ styled_qr_card_png: card, qr_url: url, updated_at: new Date() }).where(eq(stages.stage_number, s.stage_number));
+      await db
+        .update(stages)
+        .set({ styled_qr_card_png: card, qr_url: url, updated_at: new Date() })
+        .where(eq(stages.stage_number, s.stage_number));
+      results.push({ type: `stage-${s.stage_number}`, url, success: true });
+      console.log(`[QR Generate] Stage ${s.stage_number} QR: OK`);
     } catch (e: any) {
-      errors.push(`Stage ${s.stage_number} QR: ${e.message}`);
+      const msg = `Stage ${s.stage_number} QR: ${e?.message ?? String(e)}`;
+      errors.push(msg);
+      console.error('[QR Generate]', msg);
     }
   }
 
   if (errors.length > 0) {
-    return NextResponse.json({ generated: 6 - errors.length, errors }, { status: 207 });
+    return NextResponse.json(
+      { generated: results.filter((r) => r.success).length, total: 6, errors, results },
+      { status: errors.length === 6 ? 500 : 207 },
+    );
   }
-  return NextResponse.json({ generated: 6 });
+
+  return NextResponse.json({ generated: 6, total: 6, results });
 }

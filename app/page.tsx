@@ -21,7 +21,7 @@ export default function LandingRedirect() {
           .then((r) => r.ok ? r.json() : null)
           .then((me) => {
             if (!me || me.status === 'cancelled') { router.replace('/register'); return; }
-            if (me.currentStage > 5) { router.replace('/congratulations'); return; }
+            if (me.currentStage >= 6 || me.status === 'completed') { router.replace('/congratulations'); return; }
             router.replace(`/stage/${me.currentStage}`);
           })
           .catch(() => router.replace('/register'));
