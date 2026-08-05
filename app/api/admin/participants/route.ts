@@ -7,6 +7,7 @@ import { cancelParticipant } from '@/lib/services/student.service';
 import { bulkDeleteParticipantsRequestSchema } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 export async function GET(request: NextRequest) {
   const auth = await requireAdminAuth(request);
@@ -15,8 +16,8 @@ export async function GET(request: NextRequest) {
   const status = searchParams.get('status');
   const sort = searchParams.get('sort') ?? 'stage_desc';
 
-  let query = db.select().from(participants);
-  const rows = await query;
+  // Always fetch fresh from DB with no caching
+  const rows = await db.select().from(participants);
 
   let filtered = status ? rows.filter((p) => p.status === status) : rows;
 
@@ -27,11 +28,24 @@ export async function GET(request: NextRequest) {
     return 0;
   });
 
-  return NextResponse.json(filtered.map((p) => ({
-    id: p.id, name: p.name, phone: p.phone, status: p.status,
-    currentStage: p.current_stage, registeredAt: p.registered_at.toISOString(),
-    cancelledAt: p.cancelled_at?.toISOString() ?? null, cancelReason: p.cancel_reason,
-  })));
+  return NextResponse.json(
+    filtered.map((p) => ({
+      id: p.id,
+      name: p.name,
+      phone: p.phone,
+      status: p.status,
+      currentStage: p.current_stage,
+      registeredAt: p.registered_at.toISOString(),
+      cancelledAt: p.cancelled_at ? new Date(p.cancelled_at).toISOString() : null,
+      cancelReason: p.cancel_reason,
+    })),
+    {
+      headers: {
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+        Pragma: 'no-cache',
+      },
+    },
+  );
 }
 
 export async function DELETE(request: NextRequest) {

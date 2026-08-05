@@ -44,7 +44,9 @@ export default function AuditLog() {
   async function fetchLogs() {
     const token = getToken();
     if (!token) { router.replace('/admin/login'); return; }
-    const res = await fetch(`/api/admin/audit-log?type=${typeFilter}&sort=${sort}`, {
+    // Cache-busting timestamp
+    const ts = Date.now();
+    const res = await fetch(`/api/admin/audit-log?type=${typeFilter}&sort=${sort}&_t=${ts}`, {
       headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
     });
@@ -61,9 +63,9 @@ export default function AuditLog() {
     fetchLogs();
   }, [typeFilter, sort]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-refresh every 5s
+  // Auto-refresh every 3s for near-real-time updates
   useEffect(() => {
-    const id = setInterval(fetchLogs, 5000);
+    const id = setInterval(fetchLogs, 3000);
     return () => clearInterval(id);
   }, [typeFilter, sort]); // eslint-disable-line react-hooks/exhaustive-deps
 

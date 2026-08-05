@@ -45,7 +45,9 @@ export default function ReregisterPage() {
   async function load() {
     const token = getToken();
     if (!token) { router.replace('/admin/login'); return; }
-    const res = await fetch('/api/admin/participants?status=cancelled', {
+    // Add timestamp to bypass any browser-level caching
+    const ts = Date.now();
+    const res = await fetch(`/api/admin/participants?status=cancelled&_t=${ts}`, {
       headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
     });
@@ -54,7 +56,12 @@ export default function ReregisterPage() {
     setLoading(false);
   }
 
-  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    load();
+    // Auto-refresh every 3 seconds so new cancellations appear immediately
+    const iv = setInterval(load, 3000);
+    return () => clearInterval(iv);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function openModal(p: Participant) {
     setSelected(p);
