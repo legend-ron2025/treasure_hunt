@@ -167,10 +167,14 @@ export default function StagePage() {
               )}
 
               {stageNumber < 5 && content.wordFragment && (
-                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
-                  <p className="text-xs font-semibold text-amber-700 uppercase tracking-wide mb-1">Your Word Fragment</p>
-                  <p className="text-2xl font-bold text-amber-800 tracking-widest">{content.wordFragment}</p>
-                  <p className="text-xs text-amber-600 mt-1">Remember this — you will need it at the Final Boss stage!</p>
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                  <p className="text-xs font-semibold text-amber-700 uppercase tracking-wide mb-2">Your Word Fragment</p>
+                  <div className="min-h-[4.5rem] flex items-center justify-center px-2">
+                    <p className="text-3xl font-bold text-amber-800 tracking-wide leading-tight text-center break-words max-w-full">
+                      {content.wordFragment}
+                    </p>
+                  </div>
+                  <p className="text-xs text-amber-600 mt-2">Remember this — you will need it at the Final Boss stage!</p>
                 </div>
               )}
             </div>

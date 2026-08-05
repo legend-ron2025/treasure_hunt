@@ -107,8 +107,12 @@ export async function generateQrCard(
     }
 
     if (wordFragment) {
+      const BOX_W = 1400;
+      const BOX_PADDING = 120;
+      const EST_CHAR_WIDTH = 108;
+      const maxChars = Math.max(8, Math.floor((BOX_W - BOX_PADDING) / EST_CHAR_WIDTH));
+
       const wrappedWords = (() => {
-        const maxChars = 18;
         const parts = wordFragment.split(/\s+/);
         const lines: string[] = [];
         let current = '';
@@ -141,11 +145,10 @@ export async function generateQrCard(
       })();
 
       const lineCount = wrappedWords.length;
-      const textFontSize = lineCount > 1 ? 120 : 160;
-      const textLetterSpacing = lineCount > 1 ? 10 : 14;
+      const textFontSize = lineCount === 1 ? 160 : lineCount === 2 ? 140 : lineCount === 3 ? 120 : 100;
+      const textLetterSpacing = lineCount === 1 ? 14 : 10;
       const lineHeight = Math.round(textFontSize * 1.15);
-      const BOX_W = 1400;
-      const BOX_H = 180 + lineCount * lineHeight;
+      const BOX_H = 240 + lineCount * lineHeight;
       const BOX_X = (CARD_W - BOX_W) / 2;
       const BOX_Y = QR_BOT + 430;
       const LABEL_Y = BOX_Y + 115;
