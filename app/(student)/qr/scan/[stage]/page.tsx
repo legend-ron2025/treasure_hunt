@@ -33,6 +33,20 @@ export default function QRScanPage() {
     if (!token) { router.replace('/register'); return; }
     if (isNaN(stageNumber) || stageNumber < 1 || stageNumber > 5) { router.replace('/register'); return; }
 
+    // Redirect to canonical domain if this page was opened from an old/deleted deployment
+    try {
+      const canonical = process.env.NEXT_PUBLIC_BASE_URL;
+      if (canonical && typeof window !== 'undefined') {
+        const canonicalHost = new URL(canonical).host.replace(/:\d+$/, '');
+        if (window.location.host.replace(/:\d+$/, '') !== canonicalHost) {
+          window.location.replace(canonical.replace(/\/$/, '') + window.location.pathname + window.location.search);
+          return;
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+
     setStatus('starting');
 
     async function startScanner() {

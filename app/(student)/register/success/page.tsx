@@ -10,6 +10,19 @@ export default function RegistrationSuccess() {
   const visibilityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    // Redirect to canonical domain if necessary (handles old/deleted QR links)
+    try {
+      const canonical = process.env.NEXT_PUBLIC_BASE_URL;
+      if (canonical && typeof window !== 'undefined') {
+        const canonicalHost = new URL(canonical).host.replace(/:\d+$/, '');
+        if (window.location.host.replace(/:\d+$/, '') !== canonicalHost) {
+          window.location.replace(canonical.replace(/\/$/, '') + window.location.pathname + window.location.search);
+          return;
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
     const token = localStorage.getItem('studentToken');
     if (!token) { router.replace('/register'); return; }
 

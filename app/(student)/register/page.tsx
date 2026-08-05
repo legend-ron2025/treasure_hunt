@@ -17,6 +17,19 @@ export default function RegistrationPage() {
   const [existingParticipant, setExistingParticipant] = useState<{ currentStage: number; status: string } | null>(null);
 
   useEffect(() => {
+    // If a canonical PUBLIC base URL is set, redirect here if user opened an old/deleted deployment
+    try {
+      const canonical = process.env.NEXT_PUBLIC_BASE_URL;
+      if (canonical && typeof window !== 'undefined') {
+        const canonicalHost = new URL(canonical).host.replace(/:\d+$/, '');
+        if (window.location.host.replace(/:\d+$/, '') !== canonicalHost) {
+          window.location.replace(canonical.replace(/\/$/, '') + window.location.pathname + window.location.search);
+          return;
+        }
+      }
+    } catch (e) {
+      // ignore URL parse errors
+    }
     // Check event window first — redirect to countdown if not active
     fetch('/api/time', { cache: 'no-store' })
       .then((r) => r.ok ? r.json() : { eventStatus: 'before' })
