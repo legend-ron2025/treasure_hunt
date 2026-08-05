@@ -11,6 +11,10 @@ export default function QRScanPage() {
 
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<'idle' | 'starting' | 'scanning' | 'mismatch' | 'denied' | 'matched'>('idle');
+  const [showAccessModal, setShowAccessModal] = useState(false);
+  const [accessCode, setAccessCode] = useState('');
+  const [accessError, setAccessError] = useState('');
+  const [verifying, setVerifying] = useState(false);
   const noDetectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const matchedRef = useRef(false);
   const html5QrCodeRef = useRef<any>(null);
@@ -48,13 +52,13 @@ export default function QRScanPage() {
               noDetectTimerRef.current = null;
             }
 
-            if (isCorrectQr(decodedText)) {
-              matchedRef.current = true;
-              setStatus('matched');
-              qr.stop().catch(() => {}).finally(() => {
-                router.push(`/stage/${stageNumber}`);
-              });
-            } else {
+              if (isCorrectQr(decodedText)) {
+                matchedRef.current = true;
+                setStatus('matched');
+                // Stop camera and prompt user for the access code for this stage.
+                qr.stop().catch(() => {});
+                setShowAccessModal(true);
+              } else {
               setStatus('mismatch');
               setError('Wrong QR code. Please find the correct one.');
             }
@@ -103,6 +107,42 @@ export default function QRScanPage() {
     if (noDetectTimerRef.current) clearTimeout(noDetectTimerRef.current);
     // Re-mount by navigating to same page
     window.location.reload();
+  }
+
+  async function verifyAccessCode() {
+    setAccessError('');
+    if (!/^[A-Za-z0-9]{6}$/.test(accessCode)) {
+      setAccessError('Access code must be 6 alphanumeric characters.');
+      return;
+    }
+    setVerifying(true);
+    try {
+      const token = localStorage.getItem('studentToken');
+      const res = await fetch(`/api/student/stage/${stageNumber}/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ accessCode: accessCode.toUpperCase() }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setAccessError(data.error ?? 'Invalid access code.');
+        setVerifying(false);
+        return;
+      }
+
+      // On success, follow server's nextAction if present
+      if (data.nextAction?.type === 'scan_qr' && data.nextAction.nextStage) {
+        router.push(`/qr/scan/${data.nextAction.nextStage}`);
+      } else if (data.nextAction?.type === 'goto_stage' && data.nextAction.nextStage) {
+        router.push(`/stage/${data.nextAction.nextStage}`);
+      } else {
+        // Default: go to this stage page
+        router.push(`/stage/${stageNumber}`);
+      }
+    } catch (err: any) {
+      setAccessError('Network error. Please try again.');
+      setVerifying(false);
+    }
   }
 
   const stageNames = ['', 'Binary Puzzle', 'Mirror Text', 'Password Challenge', 'Caesar Cipher', 'Final Boss 🏆'];
@@ -167,6 +207,38 @@ export default function QRScanPage() {
               </div>
             </div>
           )}
+            {/* Access code modal shown after QR match */}
+            {showAccessModal && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/60 rounded-2xl z-20">
+                <div className="w-full max-w-sm bg-white rounded-xl p-6 space-y-4">
+                  <h3 className="text-lg font-semibold text-gray-800">Enter Access Code</h3>
+                  <p className="text-sm text-gray-600">Scan verified. Please enter the stage access code to continue.</p>
+                  <input
+                    value={accessCode}
+                    onChange={(e) => { setAccessCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '')); setAccessError(''); }}
+                    maxLength={6}
+                    className="w-full px-3 py-2 border rounded-lg text-center font-mono text-2xl tracking-widest focus:outline-none"
+                    placeholder="XXXXXX"
+                  />
+                  {accessError && <p className="text-sm text-red-600">{accessError}</p>}
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => { setShowAccessModal(false); window.location.reload(); }}
+                      className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-800 py-2 rounded-lg"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={verifyAccessCode}
+                      disabled={verifying}
+                      className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg"
+                    >
+                      {verifying ? 'Checking…' : 'Submit'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
         </div>
 
         {/* Scanning status */}
