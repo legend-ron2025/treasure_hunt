@@ -112,7 +112,10 @@ export default function DashboardOverview() {
   async function fetchLive() {
     const token = getToken();
     if (!token) { router.replace('/admin/login'); return; }
-    const res = await fetch('/api/admin/live', { headers: { Authorization: `Bearer ${token}` } });
+    const res = await fetch(`/api/admin/live?_t=${Date.now()}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    });
     if (res.status === 401) { router.replace('/admin/login'); return; }
     if (res.ok) { setSnapshot(await res.json()); setLastUpdated(new Date()); }
   }

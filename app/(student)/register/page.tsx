@@ -14,6 +14,7 @@ export default function RegistrationPage() {
   const [loading, setLoading] = useState(false);
   const [eventReady, setEventReady] = useState<boolean | null>(null);
   const [blockedCancelled, setBlockedCancelled] = useState(false);
+  const [existingParticipant, setExistingParticipant] = useState<{ currentStage: number; status: string } | null>(null);
 
   useEffect(() => {
     // Check event window first — redirect to countdown if not active
@@ -26,20 +27,45 @@ export default function RegistrationPage() {
         }
         setEventReady(true);
 
-        // If already has an active session, redirect to current stage
+        // If already has an active session, check registration status
         const token = localStorage.getItem('studentToken');
         if (!token) return;
-        fetch('/api/student/me', { headers: { Authorization: `Bearer ${token}` } })
-          .then((res) => res.ok ? res.json() : null)
+        fetch('/api/student/me', { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' })
+          .then(async (res) => {
+            if (!res.ok) {
+              const errorBody: any = await res.json().catch(() => ({}));
+              const errorMessage = typeof errorBody?.error === 'string' ? errorBody.error.toLowerCase() : '';
+
+              if (res.status === 403 && errorMessage.includes('cancelled')) {
+                localStorage.removeItem('studentToken');
+                setBlockedCancelled(true);
+                return null;
+              }
+
+              if (res.status === 401 || res.status === 403) {
+                localStorage.removeItem('studentToken');
+              }
+
+              return null;
+            }
+            return res.json();
+          })
           .then((data) => {
             if (!data) return;
             if (data.status === 'cancelled') {
-              // Show blocked screen — set a flag and let render handle it
               setBlockedCancelled(true);
               return;
             }
-            if (data.currentStage >= 6 || data.status === 'completed') { router.replace('/congratulations'); return; }
-            router.replace(`/stage/${data.currentStage}`);
+            if (data.currentStage >= 6 || data.status === 'completed') {
+              router.replace('/congratulations');
+              return;
+            }
+            if (data.currentStage > 1) {
+              router.replace(`/stage/${data.currentStage}`);
+              return;
+            }
+            // If the student is only at Stage 1, keep them on the registration page.
+            // They should only be redirected to Stage 1 after completing registration.
           })
           .catch(() => {});
       })
@@ -82,12 +108,15 @@ export default function RegistrationPage() {
       const data = await res.json();
 
       if (!res.ok) {
-        // Event window closed between page load and submit
-        if (res.status === 403) {
+        const errorMessage = data.error ?? 'Registration failed. Please try again.';
+        if (
+          res.status === 403 &&
+          (errorMessage === 'The event has not started yet.' || errorMessage === 'The event has ended.')
+        ) {
           router.replace('/countdown');
           return;
         }
-        setApiError(data.error ?? 'Registration failed. Please try again.');
+        setApiError(errorMessage);
         return;
       }
 

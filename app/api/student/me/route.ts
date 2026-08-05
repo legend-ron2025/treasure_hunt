@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireStudentAuth, isAuthError } from '@/lib/studentAuth';
+import { db } from '@/lib/db';
+import { participants } from '@/lib/db/schema';
+import { eq } from 'drizzle-orm';
 import { getParticipantById } from '@/lib/services/student.service';
 import type { StudentMeResponse } from '@/lib/types';
 

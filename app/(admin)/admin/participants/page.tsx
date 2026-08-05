@@ -39,7 +39,10 @@ export default function ParticipantList() {
   async function load() {
     const token = getToken();
     if (!token) { router.replace('/admin/login'); return; }
-    const res = await fetch('/api/admin/participants', { headers: { Authorization: `Bearer ${token}` } });
+    const res = await fetch(`/api/admin/participants?_t=${Date.now()}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    });
     if (res.status === 401) { router.replace('/admin/login'); return; }
     if (res.ok) { setParticipants(await res.json()); setLastUpdated(new Date()); }
   }

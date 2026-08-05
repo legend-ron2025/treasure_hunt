@@ -70,12 +70,13 @@ export async function GET(request: NextRequest) {
 
   // ── 2. Dropout / cancellation events ──────────────────────────────────────
   if (typeFilter === 'all' || typeFilter === 'dropout') {
-    for (const p of allParticipants.filter((p) => p.status === 'cancelled' && p.cancel_reason)) {
+    for (const p of allParticipants.filter((p) => p.status === 'cancelled')) {
       const reasonLabels: Record<string, string> = {
         dropout_tab_close: 'Closed the browser tab',
         dropout_navigation: 'Navigated away from the event',
         dropout_inactivity: 'Timed out due to inactivity',
         admin_manual: 'Manually cancelled by admin',
+        unknown: 'Cancellation recorded',
       };
       const reason = p.cancel_reason ?? 'unknown';
       entries.push({

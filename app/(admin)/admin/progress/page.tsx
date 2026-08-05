@@ -133,7 +133,10 @@ export default function LiveProgress() {
     const token = getToken();
     if (!token) { router.replace('/admin/login'); return; }
     const fetchData = () =>
-      fetch('/api/admin/live', { headers: { Authorization: `Bearer ${token}` } })
+      fetch(`/api/admin/live?_t=${Date.now()}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: 'no-store',
+      })
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => { if (d) { setSnapshot(d); setLastUpdated(new Date()); } });
     fetchData();
