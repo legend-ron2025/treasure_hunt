@@ -79,13 +79,21 @@ export default function RegistrationSuccess() {
             </p>
           </div>
 
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-3">
             <p className="font-semibold text-blue-800 text-lg">Now go find QR 1! 🔍</p>
             {hint && (
               <p className="mt-2 text-sm text-blue-700 italic">
                 <span className="font-medium">Hint:</span> {hint}
               </p>
             )}
+            <div className="pt-1">
+              <button
+                onClick={() => router.push('/qr/scan/1')}
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-xl text-sm font-medium transition-colors"
+              >
+                📷 Open In-Browser Scanner
+              </button>
+            </div>
           </div>
 
           <p className="text-xs text-gray-400">

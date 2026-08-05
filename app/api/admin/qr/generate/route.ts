@@ -20,14 +20,20 @@ function getBaseUrl(request: NextRequest): string {
   const envUrl = process.env.NEXT_PUBLIC_BASE_URL;
   if (envUrl && !envUrl.includes('localhost')) return envUrl.replace(/\/$/, '');
 
-  // Vercel system env
+  // Prefer deriving from the incoming request host (works behind proxies and on custom domains)
+  const host = request.headers.get('x-forwarded-host') ?? request.headers.get('host') ?? '';
+  if (host) {
+    const cleanedHost = host.replace(/:\\d+$/, '').replace(/\/$/, '');
+    const proto = cleanedHost.startsWith('localhost') ? 'http' : 'https';
+    return `${proto}://${cleanedHost}`;
+  }
+
+  // Fallback to Vercel system env if present
   const vercelUrl = process.env.VERCEL_URL;
   if (vercelUrl) return `https://${vercelUrl}`;
 
-  // Derive from incoming request host
-  const host = request.headers.get('host') ?? 'localhost:3000';
-  const proto = host.startsWith('localhost') ? 'http' : 'https';
-  return `${proto}://${host}`;
+  // Last resort: localhost
+  return 'http://localhost:3000';
 }
 
 export async function POST(request: NextRequest) {

@@ -150,6 +150,15 @@ export default function StagePage() {
           <h2 className="text-xl font-bold text-gray-800">Stage {stageNumber}</h2>
           {content && <span className={`text-xs font-semibold px-2 py-1 rounded-full ${diffClass}`}>{content.difficulty}</span>}
         </div>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => router.push(`/qr/scan/${stageNumber}`)}
+            className="text-sm bg-blue-600 text-white px-3 py-1 rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            📷 Open Scanner
+          </button>
+        </div>
 
         {content && (
           <>
