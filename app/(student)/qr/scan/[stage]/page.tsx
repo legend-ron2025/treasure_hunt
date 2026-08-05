@@ -197,27 +197,22 @@ export default function QRScanPage() {
         return;
       }
 
-      try {
-        if (data.nextAction?.type === 'scan_qr' && data.nextAction.nextStage) {
-          await router.push(`/stage/${data.nextAction.nextStage}`);
-          window.location.href = `${window.location.origin}/stage/${data.nextAction.nextStage}`;
-          return;
-        }
-        if (data.nextAction?.type === 'congratulations') {
-          await router.push('/congratulations');
-          window.location.href = `${window.location.origin}/congratulations`;
-          return;
-        }
-        if (data.nextAction?.type === 'goto_stage' && data.nextAction.nextStage) {
-          await router.push(`/stage/${data.nextAction.nextStage}`);
-          window.location.href = `${window.location.origin}/stage/${data.nextAction.nextStage}`;
-          return;
-        }
-        await router.push(`/stage/${stageNumber}`);
-        window.location.href = `${window.location.origin}/stage/${stageNumber}`;
-      } catch {
-        window.location.href = `${window.location.origin}/stage/${stageNumber}`;
+      if (data.nextAction?.type === 'scan_qr' && data.nextAction.nextStage) {
+        window.location.href = `${window.location.origin}/stage/${data.nextAction.nextStage}`;
+        return;
       }
+
+      if (data.nextAction?.type === 'congratulations') {
+        window.location.href = `${window.location.origin}/congratulations`;
+        return;
+      }
+
+      if (data.nextAction?.type === 'goto_stage' && data.nextAction.nextStage) {
+        window.location.href = `${window.location.origin}/stage/${data.nextAction.nextStage}`;
+        return;
+      }
+
+      window.location.href = `${window.location.origin}/stage/${stageNumber}`;
     } catch (err: any) {
       setAccessError('Network error. Please try again.');
       setShowAccessModal(false);

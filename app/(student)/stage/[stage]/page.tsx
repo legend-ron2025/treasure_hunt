@@ -147,21 +147,11 @@ export default function StagePage() {
         setApiError(data.error ?? 'Incorrect access code. Please try again.');
         return;
       }
-      try {
-        if (data.nextAction?.type === 'scan_qr') {
-          await router.push(`/qr/scan/${data.nextAction.nextStage}`);
-          window.location.href = `${window.location.origin}/qr/scan/${data.nextAction.nextStage}`;
-          return;
-        }
-        await router.push('/congratulations');
-        window.location.href = `${window.location.origin}/congratulations`;
-      } catch {
-        if (data.nextAction?.type === 'scan_qr') {
-          window.location.href = `${window.location.origin}/qr/scan/${data.nextAction.nextStage}`;
-        } else {
-          window.location.href = `${window.location.origin}/congratulations`;
-        }
+      if (data.nextAction?.type === 'scan_qr') {
+        window.location.href = `${window.location.origin}/qr/scan/${data.nextAction.nextStage}`;
+        return;
       }
+      window.location.href = `${window.location.origin}/congratulations`;
     } catch {
       setApiError('Network error. Please try again.');
     } finally {
