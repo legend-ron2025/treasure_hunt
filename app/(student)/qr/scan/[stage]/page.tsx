@@ -20,6 +20,7 @@ export default function QRScanPage() {
   const visibilityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const matchedRef = useRef(false);
   const html5QrCodeRef = useRef<any>(null);
+  const isNavigatingRef = useRef(false);
 
   function isCorrectQr(decoded: string): boolean {
     try {
@@ -53,6 +54,7 @@ export default function QRScanPage() {
     setError(null);
 
     function sendDropout(reason: 'dropout_tab_close' | 'dropout_navigation') {
+      if (isNavigatingRef.current) return;
       const token = localStorage.getItem('studentToken');
       if (!token) return;
       if (typeof navigator?.sendBeacon !== 'function') return;
@@ -106,10 +108,13 @@ export default function QRScanPage() {
 
             if (isCorrectQr(decodedText)) {
               matchedRef.current = true;
+              isNavigatingRef.current = true;
               setStatus('matched');
               setError(null);
               qr.stop().catch(() => {});
-              setShowAccessModal(true);
+              setTimeout(() => {
+                window.location.href = `${window.location.origin}/stage/${stageNumber}`;
+              }, 500);
             } else {
               setStatus('scanning');
               setError('Wrong QR code. Please scan the correct QR for this stage.');
@@ -197,6 +202,7 @@ export default function QRScanPage() {
         return;
       }
 
+      isNavigatingRef.current = true;
       if (data.nextAction?.type === 'scan_qr' && data.nextAction.nextStage) {
         window.location.href = `${window.location.origin}/stage/${data.nextAction.nextStage}`;
         return;

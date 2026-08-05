@@ -17,6 +17,7 @@ export default function StagePage() {
   const [apiError, setApiError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const visibilityTimerRef = useRef<number | null>(null);
+  const isNavigatingRef = useRef(false);
 
   useEffect(() => {
     if (isNaN(stageNumber) || stageNumber < 1 || stageNumber > 5) {
@@ -94,6 +95,7 @@ export default function StagePage() {
     }, 2 * 60 * 1000);
 
     function sendDropout(reason: 'dropout_tab_close' | 'dropout_navigation') {
+      if (isNavigatingRef.current) return;
       const t = localStorage.getItem('studentToken');
       if (!t) return;
       safeSendBeacon('/api/student/dropout', { token: t, reason });
@@ -147,6 +149,7 @@ export default function StagePage() {
         setApiError(data.error ?? 'Incorrect access code. Please try again.');
         return;
       }
+      isNavigatingRef.current = true;
       if (data.nextAction?.type === 'scan_qr') {
         window.location.href = `${window.location.origin}/qr/scan/${data.nextAction.nextStage}`;
         return;
@@ -187,7 +190,10 @@ export default function StagePage() {
         <div className="flex flex-col gap-3">
           <button
             type="button"
-            onClick={() => router.push(`/qr/scan/${stageNumber}`)}
+            onClick={() => {
+              isNavigatingRef.current = true;
+              router.push(`/qr/scan/${stageNumber}`);
+            }}
             className="text-sm bg-emerald-600 text-white px-3 py-2 rounded-xl hover:bg-emerald-700 transition-colors shadow-lg shadow-emerald-500/20"
           >
             📷 Scan QR for this stage

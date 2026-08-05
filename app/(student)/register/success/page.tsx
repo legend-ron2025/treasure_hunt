@@ -8,6 +8,7 @@ export default function RegistrationSuccess() {
   const [hint, setHint] = useState<string | null>(null);
   const [studentName, setStudentName] = useState<string>('');
   const visibilityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isNavigatingRef = useRef(false);
 
   useEffect(() => {
     // Redirect to canonical domain if necessary (handles old/deleted QR links)
@@ -50,6 +51,7 @@ export default function RegistrationSuccess() {
     }, 2 * 60 * 1000);
 
     function sendDropout(reason: 'dropout_tab_close' | 'dropout_navigation') {
+      if (isNavigatingRef.current) return;
       const t = localStorage.getItem('studentToken');
       if (!t) return;
       if (typeof navigator?.sendBeacon !== 'function') return;
@@ -114,7 +116,10 @@ export default function RegistrationSuccess() {
             )}
             <div className="pt-1">
               <button
-                onClick={() => router.push('/stage/1')}
+                onClick={() => {
+                  isNavigatingRef.current = true;
+                  router.push('/stage/1');
+                }}
                 className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl text-sm font-medium transition-colors"
               >
                 📜 View Stage 1 Puzzle
