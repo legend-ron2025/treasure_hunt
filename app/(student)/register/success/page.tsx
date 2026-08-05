@@ -23,6 +23,13 @@ export default function RegistrationSuccess() {
       if (stage?.hintText) setHint(stage.hintText);
     }).catch(() => {});
 
+    // Auto-open in-browser scanner shortly after showing success page
+    const autoTimer = setTimeout(() => {
+      // Keep the user on this page if they were redirected away already
+      const t = localStorage.getItem('studentToken');
+      if (t) router.push('/qr/scan/1');
+    }, 900);
+
     // Heartbeat every 2 minutes
     const heartbeatInterval = setInterval(() => {
       const t = localStorage.getItem('studentToken');
@@ -58,6 +65,7 @@ export default function RegistrationSuccess() {
       clearInterval(heartbeatInterval);
       window.removeEventListener('beforeunload', handleBeforeUnload);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      clearTimeout(autoTimer);
       if (visibilityTimerRef.current) clearTimeout(visibilityTimerRef.current);
     };
   }, [router]);
