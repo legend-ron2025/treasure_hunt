@@ -1,32 +1,33 @@
 'use client';
 /**
- * QR Scan + Access Code page — uses jsqr + native getUserMedia.
+ * /qr/scan/[stage] — Full stage page: QR scan → access code → puzzle/hint/fragment
  *
- * Why not html5-qrcode:
- *   It manipulates a DOM node by ID outside React, which conflicts with
- *   React 18 Strict Mode's double-invocation and causes "element already in use"
- *   errors and camera-stuck-on-loading bugs.
+ * Flow:
+ *  1. Verify auth + current_stage matches URL
+ *  2. Fetch stage content (puzzle, hint, word fragment)
+ *  3. Show camera — scan the QR for this stage
+ *  4. Correct QR → show access code input + puzzle/hint/fragment below
+ *  5. Correct code → advance to /qr/scan/[next] or /congratulations
  *
- * This implementation:
- *   - Uses a <video ref> + canvas + requestAnimationFrame — fully React-controlled
- *   - jsqr decodes frames client-side with no external DOM manipulation
- *   - One useEffect for auth; one useEffect for camera (keyed off startTrigger)
- *   - Dropout only on actual browser close (beforeunload)
+ * Camera: jsqr + native getUserMedia (no html5-qrcode DOM issues)
+ * Navigation: router.push only, isNavigatingRef prevents false dropout
+ * Dropout: beforeunload only (not tab switch / visibility change)
  */
-import { useEffect, useRef, useState, useCallback, FormEvent } from 'react';
+import { useEffect, useRef, useState, FormEvent } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import CollegeHeader from '@/components/CollegeHeader';
 import SessionWarningBanner from '@/components/SessionWarningBanner';
+import type { StageContentResponse } from '@/lib/types';
 
 type Phase =
-  | 'verifying'
-  | 'loading'
-  | 'scanning'
-  | 'code_entry'
-  | 'submitting'
-  | 'success'
-  | 'error'
-  | 'denied';
+  | 'verifying'   // checking auth + fetching stage content
+  | 'loading'     // camera starting
+  | 'scanning'    // camera active, waiting for QR
+  | 'code_entry'  // QR scanned, show access code + puzzle
+  | 'submitting'  // submitting code to server
+  | 'success'     // code accepted, redirecting
+  | 'error'       // camera error
+  | 'denied';     // camera permission denied
 
 export default function QRScanPage() {
   const router = useRouter();
@@ -34,11 +35,11 @@ export default function QRScanPage() {
   const stageNumber = parseInt(params.stage, 10);
 
   const [phase, setPhase] = useState<Phase>('verifying');
+  const [stageContent, setStageContent] = useState<StageContentResponse | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
   const [accessCode, setAccessCode] = useState('');
   const [codeError, setCodeError] = useState('');
-  // Incrementing this kicks the camera useEffect to (re)start.
-  // 0 = auth not done yet; >0 = start / retry.
+  // Incrementing starts/restarts the camera effect. 0 = not yet authorized.
   const [startTrigger, setStartTrigger] = useState(0);
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -49,7 +50,7 @@ export default function QRScanPage() {
   const stageRef = useRef(stageNumber);
   stageRef.current = stageNumber;
 
-  // ── Auth check ──────────────────────────────────────────────────────────────
+  // ── 1. Auth check + stage content fetch ─────────────────────────────────────
   useEffect(() => {
     const token = localStorage.getItem('studentToken');
     if (!token) { router.replace('/register'); return; }
@@ -57,12 +58,22 @@ export default function QRScanPage() {
       router.replace('/register'); return;
     }
 
-    fetch(`/api/student/me?_t=${Date.now()}`, {
-      cache: 'no-store',
-      headers: { Authorization: `Bearer ${token}`, 'Cache-Control': 'no-cache' },
-    })
-      .then((r) => r.ok ? r.json() : null)
-      .then((me) => {
+    async function verify() {
+      try {
+        // Fetch both in parallel
+        const [meRes, stageRes] = await Promise.all([
+          fetch(`/api/student/me?_t=${Date.now()}`, {
+            cache: 'no-store',
+            headers: { Authorization: `Bearer ${token}`, 'Cache-Control': 'no-cache' },
+          }),
+          fetch(`/api/student/stage/${stageNumber}?_t=${Date.now()}`, {
+            cache: 'no-store',
+            headers: { Authorization: `Bearer ${token}`, 'Cache-Control': 'no-cache' },
+          }),
+        ]);
+
+        const me = meRes.ok ? await meRes.json() : null;
+
         if (!me || me.status === 'cancelled') { router.replace('/register'); return; }
         if (me.currentStage >= 6 || me.status === 'completed') {
           isNavigatingRef.current = true;
@@ -70,17 +81,27 @@ export default function QRScanPage() {
           return;
         }
         if (me.currentStage !== stageNumber) {
+          // Wrong stage URL — redirect to correct QR scan page
           isNavigatingRef.current = true;
           router.replace(`/qr/scan/${me.currentStage}`);
           return;
         }
+
+        // Load stage content (puzzle, hint, word fragment)
+        if (stageRes.ok) {
+          const content: StageContentResponse = await stageRes.json();
+          setStageContent(content);
+        }
+
         // Auth passed — start camera
         setStartTrigger(1);
-      })
-      .catch(() => {
-        // Network error — fail open
+      } catch {
+        // Network error — fail open (start camera without stage content)
         setStartTrigger(1);
-      });
+      }
+    }
+
+    verify();
 
     function handleBeforeUnload() {
       if (isNavigatingRef.current) return;
@@ -99,23 +120,22 @@ export default function QRScanPage() {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [router, stageNumber]);
 
-  // ── Camera + QR scan loop ───────────────────────────────────────────────────
+  // ── 2. Camera + QR decode loop ───────────────────────────────────────────────
   useEffect(() => {
     if (startTrigger === 0) return;
 
     let mounted = true;
-
     setPhase('loading');
     setErrorMsg('');
 
     async function startCamera() {
       try {
-        // Stop any existing stream
+        // Tear down any previous stream
+        cancelAnimationFrame(rafRef.current);
         if (streamRef.current) {
           streamRef.current.getTracks().forEach((t) => t.stop());
           streamRef.current = null;
         }
-        cancelAnimationFrame(rafRef.current);
 
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
@@ -125,14 +145,14 @@ export default function QRScanPage() {
         if (!mounted) { stream.getTracks().forEach((t) => t.stop()); return; }
 
         streamRef.current = stream;
-        const video = videoRef.current!;
+        const video = videoRef.current;
+        if (!video) return;
         video.srcObject = stream;
         await video.play();
 
         if (!mounted) return;
         setPhase('scanning');
 
-        // Decode loop using jsqr
         const jsQR = (await import('jsqr')).default;
 
         const tick = () => {
@@ -143,7 +163,6 @@ export default function QRScanPage() {
             rafRef.current = requestAnimationFrame(tick);
             return;
           }
-
           const w = vid.videoWidth;
           const h = vid.videoHeight;
           if (w === 0 || h === 0) { rafRef.current = requestAnimationFrame(tick); return; }
@@ -162,13 +181,11 @@ export default function QRScanPage() {
             const expected = `/stage/${stageRef.current}`;
 
             if (path === expected || path.endsWith(expected)) {
-              // Correct QR — stop camera, show code entry
+              // ✅ Correct QR — stop camera, show access code entry
               mounted = false;
               cancelAnimationFrame(rafRef.current);
-              if (streamRef.current) {
-                streamRef.current.getTracks().forEach((t) => t.stop());
-                streamRef.current = null;
-              }
+              streamRef.current?.getTracks().forEach((t) => t.stop());
+              streamRef.current = null;
               setPhase('code_entry');
               setErrorMsg('');
               return;
@@ -183,13 +200,9 @@ export default function QRScanPage() {
         rafRef.current = requestAnimationFrame(tick);
       } catch (err: any) {
         if (!mounted) return;
-        const msg = String(err?.name ?? err?.message ?? '').toLowerCase();
-        if (
-          msg.includes('notallowederror') ||
-          msg.includes('permissiondenied') ||
-          msg.includes('permission') ||
-          msg.includes('denied')
-        ) {
+        const name = String(err?.name ?? '').toLowerCase();
+        const msg  = String(err?.message ?? '').toLowerCase();
+        if (name.includes('notallowed') || msg.includes('permission') || msg.includes('denied')) {
           setPhase('denied');
           setErrorMsg('Camera access denied. Allow camera in your browser settings, then reload.');
         } else {
@@ -211,7 +224,7 @@ export default function QRScanPage() {
     };
   }, [startTrigger]);
 
-  // ── Submit access code ──────────────────────────────────────────────────────
+  // ── 3. Submit access code ────────────────────────────────────────────────────
   async function handleSubmitCode(e: FormEvent) {
     e.preventDefault();
     setCodeError('');
@@ -237,15 +250,17 @@ export default function QRScanPage() {
         return;
       }
 
+      // ✅ Success — navigate without triggering dropout
       isNavigatingRef.current = true;
       setPhase('success');
+
       setTimeout(() => {
         if (data.nextAction?.type === 'scan_qr') {
           router.push(`/qr/scan/${data.nextAction.nextStage}`);
         } else {
           router.push('/congratulations');
         }
-      }, 800);
+      }, 900);
     } catch {
       setPhase('code_entry');
       setCodeError('Network error. Please try again.');
@@ -259,61 +274,69 @@ export default function QRScanPage() {
     setStartTrigger((n) => n + 1);
   }
 
+  // ── UI helpers ───────────────────────────────────────────────────────────────
   const stageLabels = ['', 'Binary Decoder', 'Mirror Text', 'Password Challenge', 'Caesar Cipher', 'Final Boss 🏆'];
   const stageDiffs  = ['', 'Medium', 'Medium-Hard', 'Hard', 'Very Hard', 'Final Boss'];
-  const isScanning  = phase === 'loading' || phase === 'scanning';
+  const diffColors: Record<string, string> = {
+    Medium: 'bg-green-500/20 text-green-300',
+    'Medium-Hard': 'bg-yellow-500/20 text-yellow-300',
+    Hard: 'bg-orange-500/20 text-orange-300',
+    'Very Hard': 'bg-red-500/20 text-red-300',
+    'Final Boss 🏆': 'bg-purple-500/20 text-purple-300',
+  };
+
+  const isScanning = phase === 'loading' || phase === 'scanning';
+  const showCodeEntry = phase === 'code_entry' || phase === 'submitting';
 
   return (
     <div className="min-h-screen bg-gray-950 flex flex-col">
       <CollegeHeader />
 
-      <main className="flex-1 flex flex-col items-center px-4 py-6 gap-5 max-w-sm mx-auto w-full">
-
-        {/* Stage header */}
-        {phase !== 'verifying' && (
-          <div className="text-center w-full">
-            <h2 className="text-2xl font-bold text-white">
-              {phase === 'code_entry' || phase === 'submitting' || phase === 'success'
-                ? `🔑 Stage ${stageNumber} — Enter Code`
-                : `📷 Stage ${stageNumber} — Scan QR`}
-            </h2>
-            <p className="text-gray-400 text-sm mt-1">
-              {stageLabels[stageNumber]} ·{' '}
-              <span className="text-blue-400">{stageDiffs[stageNumber]}</span>
-            </p>
-          </div>
-        )}
+      <main className="flex-1 flex flex-col items-center px-4 py-6 gap-5 max-w-lg mx-auto w-full">
 
         {/* ── VERIFYING ── */}
         {phase === 'verifying' && (
           <div className="flex items-center justify-center py-20">
             <div className="text-center space-y-3">
               <div className="w-10 h-10 border-4 border-blue-400 border-t-transparent rounded-full animate-spin mx-auto" />
-              <p className="text-gray-400 text-sm">Verifying…</p>
+              <p className="text-gray-400 text-sm">Loading stage…</p>
             </div>
           </div>
         )}
 
-        {/* ── CAMERA VIEW ── always rendered when scanning so refs are stable */}
-        <div className={isScanning ? 'relative w-full' : 'hidden'}>
-          {/* Corner decorators */}
+        {/* Stage header — shown after verifying */}
+        {phase !== 'verifying' && (
+          <div className="text-center w-full">
+            <h2 className="text-2xl font-bold text-white">
+              {showCodeEntry || phase === 'success'
+                ? `🔑 Stage ${stageNumber} — Enter Code`
+                : `📷 Stage ${stageNumber} — Scan QR`}
+            </h2>
+            <div className="flex items-center justify-center gap-2 mt-1">
+              <p className="text-gray-400 text-sm">{stageLabels[stageNumber]}</p>
+              {stageContent?.difficulty && (
+                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${diffColors[stageContent.difficulty] ?? 'bg-gray-700 text-gray-300'}`}>
+                  {stageContent.difficulty}
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── CAMERA VIEW ── video always in DOM while scanning so refs stay valid */}
+        <div className={isScanning ? 'relative w-full' : 'hidden'} aria-hidden={!isScanning}>
           <div className="absolute top-2 left-2 w-8 h-8 border-t-4 border-l-4 border-blue-400 rounded-tl-lg z-10 pointer-events-none" />
           <div className="absolute top-2 right-2 w-8 h-8 border-t-4 border-r-4 border-blue-400 rounded-tr-lg z-10 pointer-events-none" />
           <div className="absolute bottom-2 left-2 w-8 h-8 border-b-4 border-l-4 border-blue-400 rounded-bl-lg z-10 pointer-events-none" />
           <div className="absolute bottom-2 right-2 w-8 h-8 border-b-4 border-r-4 border-blue-400 rounded-br-lg z-10 pointer-events-none" />
-
-          {/* Live video feed */}
           <video
             ref={videoRef}
             muted
             playsInline
             className="w-full rounded-2xl bg-black shadow-2xl"
-            style={{ minHeight: '300px', objectFit: 'cover' }}
+            style={{ minHeight: '280px', objectFit: 'cover' }}
           />
-          {/* Hidden canvas for frame decoding */}
           <canvas ref={canvasRef} className="hidden" />
-
-          {/* Loading overlay */}
           {phase === 'loading' && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/80 rounded-2xl">
               <div className="text-center space-y-2">
@@ -326,20 +349,17 @@ export default function QRScanPage() {
 
         {/* Scan status */}
         {phase === 'scanning' && !errorMsg && (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 w-full justify-center">
             <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
-            <p className="text-green-400 text-sm">Camera active — hold QR in frame</p>
+            <p className="text-green-400 text-sm">Camera active — hold QR #{stageNumber} in frame</p>
           </div>
         )}
 
-        {/* Wrong QR / no-detect error */}
+        {/* Wrong QR error (camera still running) */}
         {isScanning && errorMsg && (
           <div className="w-full bg-red-900/40 border border-red-700 rounded-2xl p-4 text-center space-y-3">
             <p className="text-red-300 text-sm">{errorMsg}</p>
-            <button
-              onClick={retryScanner}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-xl text-sm font-medium transition-colors"
-            >
+            <button onClick={retryScanner} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-xl text-sm font-medium transition-colors">
               🔄 Try Again
             </button>
           </div>
@@ -350,10 +370,7 @@ export default function QRScanPage() {
           <div className="w-full bg-red-900/40 border border-red-700 rounded-2xl p-5 text-center space-y-3">
             <p className="text-4xl">⚠️</p>
             <p className="text-red-300 text-sm">{errorMsg}</p>
-            <button
-              onClick={retryScanner}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-xl text-sm font-medium transition-colors"
-            >
+            <button onClick={retryScanner} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-xl text-sm font-medium transition-colors">
               🔄 Try Again
             </button>
           </div>
@@ -364,50 +381,38 @@ export default function QRScanPage() {
           <div className="w-full bg-red-900/40 border border-red-700 rounded-2xl p-5 text-center space-y-3">
             <p className="text-4xl">📵</p>
             <p className="text-red-300 text-sm">{errorMsg}</p>
-            <p className="text-gray-500 text-xs">
-              Chrome: tap 🔒 → Camera → Allow, then reload.
-            </p>
-            <button
-              onClick={() => window.location.reload()}
-              className="w-full bg-gray-700 hover:bg-gray-600 text-white py-2 rounded-xl text-sm transition-colors"
-            >
+            <p className="text-gray-500 text-xs">Chrome: tap 🔒 → Camera → Allow → reload.</p>
+            <button onClick={() => window.location.reload()} className="w-full bg-gray-700 hover:bg-gray-600 text-white py-2 rounded-xl text-sm transition-colors">
               Reload Page
             </button>
           </div>
         )}
 
-        {/* ── ACCESS CODE ── */}
-        {(phase === 'code_entry' || phase === 'submitting') && (
+        {/* ── ACCESS CODE + PUZZLE ── */}
+        {showCodeEntry && (
           <div className="w-full space-y-4">
+            {/* QR confirmed banner */}
             <div className="bg-green-900/30 border border-green-700 rounded-2xl p-4 text-center">
-              <p className="text-green-400 font-semibold">✅ QR Scanned Successfully!</p>
-              <p className="text-green-300 text-sm mt-1">
-                Enter the 6-character access code shown at this station.
-              </p>
+              <p className="text-green-400 font-semibold">✅ QR #{stageNumber} Scanned!</p>
+              <p className="text-green-300 text-sm mt-1">Enter the 6-character access code shown at this station.</p>
             </div>
 
-            <form onSubmit={handleSubmitCode} className="space-y-4">
+            {/* Access code form */}
+            <form onSubmit={handleSubmitCode} className="space-y-3">
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2 text-center">
-                  Access Code
-                </label>
+                <label className="block text-sm font-medium text-gray-300 mb-2 text-center">Access Code</label>
                 <input
                   type="text"
                   maxLength={6}
                   autoCapitalize="characters"
                   autoFocus
                   value={accessCode}
-                  onChange={(e) => {
-                    setAccessCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''));
-                    setCodeError('');
-                  }}
+                  onChange={(e) => { setAccessCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '')); setCodeError(''); }}
                   disabled={phase === 'submitting'}
                   className="w-full bg-gray-800 border border-gray-600 rounded-2xl px-4 py-4 text-white text-3xl font-mono tracking-[0.3em] text-center focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50"
                   placeholder="XXXXXX"
                 />
-                {codeError && (
-                  <p className="text-red-400 text-sm mt-2 text-center">{codeError}</p>
-                )}
+                {codeError && <p className="text-red-400 text-sm mt-2 text-center">{codeError}</p>}
               </div>
 
               <button
@@ -416,12 +421,7 @@ export default function QRScanPage() {
                 className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed text-white py-3.5 rounded-2xl text-base font-semibold transition-colors flex items-center justify-center gap-2"
               >
                 {phase === 'submitting'
-                  ? (
-                    <>
-                      <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      Checking…
-                    </>
-                  )
+                  ? <><span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" /> Checking…</>
                   : '🔓 Submit Code'}
               </button>
 
@@ -433,6 +433,37 @@ export default function QRScanPage() {
                 ↩ Scan QR Again
               </button>
             </form>
+
+            {/* Puzzle + hint + word fragment */}
+            {stageContent && (
+              <div className="bg-gray-900 border border-gray-700 rounded-2xl p-5 space-y-4">
+                <div>
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Puzzle</p>
+                  <p className="text-gray-200 text-sm leading-relaxed whitespace-pre-wrap">{stageContent.puzzleText}</p>
+                </div>
+
+                {stageContent.hintText && stageNumber < 5 && (
+                  <div className="border-t border-gray-700 pt-3">
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Hint</p>
+                    <p className="text-blue-300 text-sm italic">{stageContent.hintText}</p>
+                  </div>
+                )}
+
+                {stageContent.wordFragment && stageNumber < 5 && (
+                  <div className="border-t border-gray-700 pt-3">
+                    <p className="text-xs font-semibold text-amber-500 uppercase tracking-wide mb-2">Your Word Fragment</p>
+                    <div className="bg-amber-900/30 border border-amber-700 rounded-xl p-4 flex items-center justify-center min-h-[4rem]">
+                      <p className="text-3xl font-bold text-amber-300 tracking-wide text-center break-words font-mono">
+                        {stageContent.wordFragment}
+                      </p>
+                    </div>
+                    <p className="text-xs text-amber-600 mt-2 text-center">
+                      Remember this — you will need it at the Final Boss stage!
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -441,17 +472,43 @@ export default function QRScanPage() {
           <div className="w-full bg-green-900/40 border border-green-700 rounded-2xl p-6 text-center space-y-3">
             <div className="text-5xl">🎉</div>
             <p className="text-green-300 font-bold text-lg">Stage {stageNumber} Complete!</p>
-            <p className="text-green-400 text-sm">Redirecting to next stage…</p>
+            <p className="text-green-400 text-sm">
+              {stageNumber < 5 ? `Heading to Stage ${stageNumber + 1}…` : 'Heading to congratulations…'}
+            </p>
             <div className="w-8 h-8 border-4 border-green-400 border-t-transparent rounded-full animate-spin mx-auto" />
           </div>
         )}
 
-        {/* Hint */}
+        {/* Hint strip while scanning */}
         {phase === 'scanning' && !errorMsg && (
           <div className="w-full bg-gray-900 border border-gray-700 rounded-xl p-3 text-center">
             <p className="text-gray-400 text-xs">
-              💡 Make sure QR #{stageNumber} is well-lit and fills the camera frame
+              💡 Point camera at QR #{stageNumber} — make sure it's well-lit and fills the frame
             </p>
+          </div>
+        )}
+
+        {/* Show puzzle while scanning (so students can read the clue while searching for QR) */}
+        {phase === 'scanning' && stageContent && (
+          <div className="w-full bg-gray-900 border border-gray-700 rounded-2xl p-5 space-y-4">
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Stage {stageNumber} Puzzle</p>
+              <p className="text-gray-200 text-sm leading-relaxed whitespace-pre-wrap">{stageContent.puzzleText}</p>
+            </div>
+            {stageContent.hintText && stageNumber < 5 && (
+              <div className="border-t border-gray-700 pt-3">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Hint</p>
+                <p className="text-blue-300 text-sm italic">{stageContent.hintText}</p>
+              </div>
+            )}
+            {stageContent.wordFragment && stageNumber < 5 && (
+              <div className="border-t border-gray-700 pt-3">
+                <p className="text-xs font-semibold text-amber-500 uppercase tracking-wide mb-2">Your Word Fragment</p>
+                <div className="bg-amber-900/30 border border-amber-700 rounded-xl p-3 flex items-center justify-center">
+                  <p className="text-2xl font-bold text-amber-300 tracking-wide font-mono">{stageContent.wordFragment}</p>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </main>
