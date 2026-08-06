@@ -38,35 +38,17 @@ export default function StagePage() {
     const token = localStorage.getItem('studentToken');
     if (!token) { router.replace('/register'); return; }
 
-    // The stage GET API now allows fetching any unlocked stage (stageNumber <= current_stage).
-    // No caching or retry needed — just fetch directly.
+    // The stage GET API no longer blocks on stage number — any registered student
+    // can view any stage's puzzle content. Just fetch directly.
     fetch(`/api/student/stage/${stageNumber}?_t=${Date.now()}`, {
       cache: 'no-store',
       headers: { Authorization: `Bearer ${token}`, 'Cache-Control': 'no-cache' },
     })
       .then(async (r) => {
-        if (r.status === 401 || r.status === 403) {
-          // 401 = not logged in, 403 = trying to access a future stage
-          const d = await r.json().catch(() => ({}));
-          const msg = (d as any).error ?? '';
-          if (msg.includes('cancelled')) { router.replace('/register'); return null; }
-          if (r.status === 403) {
-            // Student is trying to access a stage they haven't reached yet
-            // Redirect to their actual current stage
-            const meRes = await fetch(`/api/student/me?_t=${Date.now()}`, {
-              cache: 'no-store',
-              headers: { Authorization: `Bearer ${token}`, 'Cache-Control': 'no-cache' },
-            });
-            if (!meRes.ok) { router.replace('/register'); return null; }
-            const me = await meRes.json();
-            if (!me || me.status === 'cancelled') { router.replace('/register'); return null; }
-            if (me.currentStage >= 6 || me.status === 'completed') { router.replace('/congratulations'); return null; }
-            isNavigatingRef.current = true;
-            router.replace(`/stage/${me.currentStage}`);
-            return null;
-          }
-          router.replace('/register');
-          return null;
+        if (r.status === 401) { router.replace('/register'); return null; }
+        if (r.status === 403) {
+          // Only happens for cancelled participants now
+          router.replace('/register'); return null;
         }
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();

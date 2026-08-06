@@ -44,19 +44,10 @@ export async function GET(
     );
   }
 
-  // Stage authorization: only block if student hasn't reached this stage yet.
-  // Allow fetching current stage OR any previously completed stage (no secret data exposed).
-  // The access code is NEVER returned, so showing puzzle content for completed stages is safe.
-  if (stageNumber > participant.current_stage) {
-    return NextResponse.json(
-      { error: 'Please complete your current stage first.' },
-      { status: 403, headers: NO_CACHE_HEADERS },
-    );
-  }
-  // NOTE: stageNumber < participant.current_stage is intentionally ALLOWED.
-  // Students coming from a successful submit land on /stage/[next] where current_stage
-  // may not have propagated yet in the DB (Neon read-after-write lag). Allowing them
-  // to view any stage they've unlocked (stageNumber <= current_stage) prevents false 403s.
+  // No stage-number authorization on GET — puzzle content contains no secrets.
+  // The access code is NEVER returned. Any registered, non-cancelled student
+  // can view any stage's puzzle/hint/fragment. The submit endpoint enforces
+  // that only the correct current stage can be submitted.
 
   const content = await getStageContent(stageNumber);
   if (!content) {

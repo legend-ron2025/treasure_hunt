@@ -60,34 +60,24 @@ export default function QRScanPage() {
 
     async function verify() {
       try {
-        // Fetch me + stage content in parallel
-        const [meRes, stageRes] = await Promise.all([
-          fetch(`/api/student/me?_t=${Date.now()}`, {
-            cache: 'no-store',
-            headers: { Authorization: `Bearer ${token}`, 'Cache-Control': 'no-cache' },
-          }),
-          fetch(`/api/student/stage/${stageNumber}?_t=${Date.now()}`, {
-            cache: 'no-store',
-            headers: { Authorization: `Bearer ${token}`, 'Cache-Control': 'no-cache' },
-          }),
-        ]);
+        // Only check token validity + load stage content.
+        // The stage GET API no longer enforces stage-number authorization
+        // (puzzle content is not secret — access code is never returned).
+        // This eliminates all Neon read-after-write false redirects.
+        const stageRes = await fetch(`/api/student/stage/${stageNumber}?_t=${Date.now()}`, {
+          cache: 'no-store',
+          headers: { Authorization: `Bearer ${token}`, 'Cache-Control': 'no-cache' },
+        });
 
-        const me = meRes.ok ? await meRes.json() : null;
-
-        if (!me || me.status === 'cancelled') { router.replace('/register'); return; }
-        if (me.currentStage >= 6 || me.status === 'completed') {
-          isNavigatingRef.current = true;
-          router.replace('/congratulations');
-          return;
-        }
-        if (me.currentStage !== stageNumber) {
-          // Wrong stage URL — redirect to correct QR scan page
-          isNavigatingRef.current = true;
-          router.replace(`/qr/scan/${me.currentStage}`);
-          return;
+        if (stageRes.status === 401) {
+          router.replace('/register'); return;
         }
 
-        // Load stage content (puzzle, hint, word fragment)
+        if (stageRes.status === 403) {
+          // Cancelled participant
+          router.replace('/register'); return;
+        }
+
         if (stageRes.ok) {
           const content: StageContentResponse = await stageRes.json();
           setStageContent(content);
@@ -96,7 +86,7 @@ export default function QRScanPage() {
         // Auth passed — start camera
         setStartTrigger(1);
       } catch {
-        // Network error — fail open (start camera without stage content)
+        // Network error — fail open
         setStartTrigger(1);
       }
     }
