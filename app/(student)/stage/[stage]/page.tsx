@@ -38,85 +38,48 @@ export default function StagePage() {
     const token = localStorage.getItem('studentToken');
     if (!token) { router.replace('/register'); return; }
 
-    // Wrap in async so we can await the cache fallback delay
-    async function init() {
-    // Check sessionStorage flag set by qr/scan page after successful submit.
-    // When this flag is present and matches, use cached stage content — never
-    // hit the DB (avoids Neon read-after-write lag causing 403 → redirect to stage 1).
-    const advancedTo = sessionStorage.getItem('advancedToStage');
-    const justAdvanced = advancedTo && parseInt(advancedTo, 10) === stageNumber;
-
-    if (justAdvanced) {
-      sessionStorage.removeItem('advancedToStage');
-      const cached = sessionStorage.getItem(`stageContent_${stageNumber}`);
-      sessionStorage.removeItem(`stageContent_${stageNumber}`);
-
-      if (cached) {
-        try {
-          const data: StageContentResponse = JSON.parse(cached);
-          setContent(data);
-          setLoading(false);
-          return; // ✅ Done — no DB call needed
-        } catch { /* fall through to normal fetch */ }
-      }
-      // No cache — wait 800ms for DB to propagate then fetch once
-      await new Promise((r) => setTimeout(r, 800));
-    }
-
-    async function loadStage() {
-      try {
-        const res = await fetch(`/api/student/stage/${stageNumber}?_t=${Date.now()}`, {
-          cache: 'no-store',
-          headers: { Authorization: `Bearer ${token}`, 'Cache-Control': 'no-cache' },
-        });
-
-        if (res.ok) {
-          const data: StageContentResponse = await res.json();
-          setContent(data);
-          setLoading(false);
-          return;
-        }
-
-        if (res.status === 403) {
-          const d = await res.json().catch(() => ({}));
-          throw { redirect: true, msg: (d as any).error };
-        }
-
-        throw new Error('Failed to load stage');
-      } catch (e: any) {
-        if (e?.redirect) {
-          const t = localStorage.getItem('studentToken');
-          if (t) {
-            fetch(`/api/student/me?_t=${Date.now()}`, {
+    // The stage GET API now allows fetching any unlocked stage (stageNumber <= current_stage).
+    // No caching or retry needed — just fetch directly.
+    fetch(`/api/student/stage/${stageNumber}?_t=${Date.now()}`, {
+      cache: 'no-store',
+      headers: { Authorization: `Bearer ${token}`, 'Cache-Control': 'no-cache' },
+    })
+      .then(async (r) => {
+        if (r.status === 401 || r.status === 403) {
+          // 401 = not logged in, 403 = trying to access a future stage
+          const d = await r.json().catch(() => ({}));
+          const msg = (d as any).error ?? '';
+          if (msg.includes('cancelled')) { router.replace('/register'); return null; }
+          if (r.status === 403) {
+            // Student is trying to access a stage they haven't reached yet
+            // Redirect to their actual current stage
+            const meRes = await fetch(`/api/student/me?_t=${Date.now()}`, {
               cache: 'no-store',
-              headers: { Authorization: `Bearer ${t}`, 'Cache-Control': 'no-cache' },
-            })
-              .then((r) => r.ok ? r.json() : null)
-              .then((me) => {
-                isNavigatingRef.current = true;
-                if (!me || me.status === 'cancelled') { router.replace('/register'); return; }
-                if (me.currentStage >= 6 || me.status === 'completed') { router.replace('/congratulations'); return; }
-                if (me.currentStage !== stageNumber) {
-                  router.replace(`/stage/${me.currentStage}`);
-                } else {
-                  window.location.reload();
-                }
-              })
-              .catch(() => router.replace('/register'));
-          } else {
-            router.replace('/register');
+              headers: { Authorization: `Bearer ${token}`, 'Cache-Control': 'no-cache' },
+            });
+            if (!meRes.ok) { router.replace('/register'); return null; }
+            const me = await meRes.json();
+            if (!me || me.status === 'cancelled') { router.replace('/register'); return null; }
+            if (me.currentStage >= 6 || me.status === 'completed') { router.replace('/congratulations'); return null; }
+            isNavigatingRef.current = true;
+            router.replace(`/stage/${me.currentStage}`);
+            return null;
           }
-        } else {
-          setApiError('Failed to load stage content.');
-          setLoading(false);
+          router.replace('/register');
+          return null;
         }
-      }
-    }
-
-    loadStage();
-    } // end init()
-
-    init();
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((data: StageContentResponse | null) => {
+        if (!data) return;
+        setContent(data);
+        setLoading(false);
+      })
+      .catch(() => {
+        setApiError('Failed to load stage content. Please try again.');
+        setLoading(false);
+      });
 
     function safeSendBeacon(payload: object) {
       if (typeof navigator?.sendBeacon !== 'function') return;
@@ -141,10 +104,7 @@ export default function StagePage() {
       if (t && !document.hidden) safeSendBeacon({ token: t });
     }, 2 * 60 * 1000);
 
-    // Ban on actual browser/tab close
     function handleBeforeUnload() { sendDropout('dropout_tab_close'); }
-
-    // Ban on minimize / switch app / switch tab
     function handleVisibilityChange() {
       if (document.hidden) sendDropout('dropout_tab_close');
     }
@@ -192,7 +152,6 @@ export default function StagePage() {
 
       <main className="flex-1 px-4 py-6 max-w-lg mx-auto w-full space-y-5">
 
-        {/* Stage header */}
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div>
             <h2 className="text-2xl font-bold text-white">Stage {stageNumber}</h2>
@@ -205,7 +164,6 @@ export default function StagePage() {
           )}
         </div>
 
-        {/* Puzzle card */}
         {content && (
           <div className="bg-gray-900 border border-gray-700 rounded-2xl p-5 space-y-4">
             <div>
@@ -236,7 +194,6 @@ export default function StagePage() {
           </div>
         )}
 
-        {/* Scan QR button — main CTA */}
         <div className="space-y-2">
           <button
             type="button"

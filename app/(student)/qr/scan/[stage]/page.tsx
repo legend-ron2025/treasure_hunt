@@ -60,26 +60,7 @@ export default function QRScanPage() {
 
     async function verify() {
       try {
-        // If we just advanced to this stage from a successful submit,
-        // trust the submit result — skip the DB check to avoid read-after-write
-        // lag on Neon's connection pool causing a false redirect back.
-        const advancedTo = sessionStorage.getItem('advancedToStage');
-        if (advancedTo && parseInt(advancedTo, 10) === stageNumber) {
-          sessionStorage.removeItem('advancedToStage');
-          // Still fetch stage content (puzzle/hint/fragment) — but don't validate stage
-          const stageRes = await fetch(`/api/student/stage/${stageNumber}?_t=${Date.now()}`, {
-            cache: 'no-store',
-            headers: { Authorization: `Bearer ${token}`, 'Cache-Control': 'no-cache' },
-          });
-          if (stageRes.ok) {
-            const content: StageContentResponse = await stageRes.json();
-            setStageContent(content);
-          }
-          setStartTrigger(1);
-          return;
-        }
-
-        // Fetch both in parallel
+        // Fetch me + stage content in parallel
         const [meRes, stageRes] = await Promise.all([
           fetch(`/api/student/me?_t=${Date.now()}`, {
             cache: 'no-store',
@@ -292,35 +273,13 @@ export default function QRScanPage() {
       isNavigatingRef.current = true;
       setPhase('success');
 
-      if (data.nextAction?.type === 'scan_qr') {
-        const nextStage = data.nextAction.nextStage;
-        sessionStorage.setItem('advancedToStage', String(nextStage));
-
-        // Pre-fetch next stage content NOW (DB write already committed at this point)
-        // and cache it so the stage page never needs to re-fetch, avoiding
-        // Neon read-after-write lag that causes 403 → redirect back to stage 1
-        const token = localStorage.getItem('studentToken');
-        if (token) {
-          fetch(`/api/student/stage/${nextStage}?_t=${Date.now()}`, {
-            cache: 'no-store',
-            headers: { Authorization: `Bearer ${token}`, 'Cache-Control': 'no-cache' },
-          })
-            .then((r) => r.ok ? r.json() : null)
-            .then((nextContent) => {
-              if (nextContent) {
-                sessionStorage.setItem(`stageContent_${nextStage}`, JSON.stringify(nextContent));
-              }
-            })
-            .catch(() => { /* prefetch failed — stage page will retry */ })
-            .finally(() => {
-              setTimeout(() => router.push(`/stage/${nextStage}`), 900);
-            });
+      setTimeout(() => {
+        if (data.nextAction?.type === 'scan_qr') {
+          router.push(`/stage/${data.nextAction.nextStage}`);
         } else {
-          setTimeout(() => router.push(`/stage/${nextStage}`), 900);
+          router.push('/congratulations');
         }
-      } else {
-        setTimeout(() => router.push('/congratulations'), 900);
-      }
+      }, 900);
     } catch {
       setPhase('code_entry');
       setCodeError('Network error. Please try again.');
