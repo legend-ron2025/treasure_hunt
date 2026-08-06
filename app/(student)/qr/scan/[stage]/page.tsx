@@ -135,8 +135,27 @@ export default function QRScanPage() {
         );
       } catch { /* ignore */ }
     }
+    // Ban on minimize / switch tab / switch app
+    function handleVisibilityChange() {
+      if (document.hidden && !isNavigatingRef.current) {
+        const t = localStorage.getItem('studentToken');
+        if (!t) return;
+        try {
+          navigator.sendBeacon(
+            '/api/student/dropout',
+            new Blob([JSON.stringify({ token: t, reason: 'dropout_tab_close' })], {
+              type: 'application/json',
+            }),
+          );
+        } catch { /* ignore */ }
+      }
+    }
     window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, [router, stageNumber]);
 
   // ── 2. Camera + QR decode loop ───────────────────────────────────────────────
@@ -275,10 +294,10 @@ export default function QRScanPage() {
 
       setTimeout(() => {
         if (data.nextAction?.type === 'scan_qr') {
-          // Store the expected next stage so the auth check on the next page
-          // skips the DB read (avoids redirect back due to read-after-write lag)
+          // Go to stage puzzle page first (not directly to scan)
+          // Store flag so stage page skips stale DB read-after-write check
           sessionStorage.setItem('advancedToStage', String(data.nextAction.nextStage));
-          router.push(`/qr/scan/${data.nextAction.nextStage}`);
+          router.push(`/stage/${data.nextAction.nextStage}`);
         } else {
           router.push('/congratulations');
         }
@@ -494,7 +513,7 @@ export default function QRScanPage() {
             <div className="text-5xl">🎉</div>
             <p className="text-green-300 font-bold text-lg">Stage {stageNumber} Complete!</p>
             <p className="text-green-400 text-sm">
-              {stageNumber < 5 ? `Heading to Stage ${stageNumber + 1}…` : 'Heading to congratulations…'}
+              {stageNumber < 5 ? `Heading to Stage ${stageNumber + 1} puzzle…` : 'Heading to congratulations…'}
             </p>
             <div className="w-8 h-8 border-4 border-green-400 border-t-transparent rounded-full animate-spin mx-auto" />
           </div>

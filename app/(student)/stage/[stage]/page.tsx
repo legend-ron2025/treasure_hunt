@@ -1,9 +1,23 @@
 'use client';
-import { useEffect, useState, useRef, FormEvent } from 'react';
+/**
+ * /stage/[stage] — Puzzle page
+ *
+ * Flow:
+ *  1. Show puzzle text, hint, word fragment for this stage
+ *  2. Student reads puzzle, searches for the QR code physically
+ *  3. "📷 Scan QR" button → /qr/scan/[stage]
+ *  4. After access code verified on scan page → comes back to /stage/[next]
+ *
+ * Dropout rules:
+ *  - beforeunload (browser close / tab close) → ban immediately
+ *  - visibilitychange (minimize, switch tab, switch app) → ban immediately
+ *  - Internal navigation (router.push) is safe: isNavigatingRef prevents false dropout
+ */
+import { useEffect, useState, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import CollegeHeader from '@/components/CollegeHeader';
 import SessionWarningBanner from '@/components/SessionWarningBanner';
-import type { StageContentResponse, SubmitAccessCodeResponse } from '@/lib/types';
+import type { StageContentResponse } from '@/lib/types';
 
 export default function StagePage() {
   const router = useRouter();
@@ -12,11 +26,7 @@ export default function StagePage() {
 
   const [content, setContent] = useState<StageContentResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [accessCode, setAccessCode] = useState('');
-  const [codeError, setCodeError] = useState('');
   const [apiError, setApiError] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const visibilityTimerRef = useRef<number | null>(null);
   const isNavigatingRef = useRef(false);
 
   useEffect(() => {
@@ -28,35 +38,43 @@ export default function StagePage() {
     const token = localStorage.getItem('studentToken');
     if (!token) { router.replace('/register'); return; }
 
+    // Check sessionStorage flag set by qr/scan page after successful submit
+    // This lets us skip the stale DB read-after-write on Neon's connection pool
+    const advancedTo = sessionStorage.getItem('advancedToStage');
+    if (advancedTo && parseInt(advancedTo, 10) === stageNumber) {
+      sessionStorage.removeItem('advancedToStage');
+    }
+
     fetch(`/api/student/stage/${stageNumber}?_t=${Date.now()}`, {
       cache: 'no-store',
       headers: { Authorization: `Bearer ${token}`, 'Cache-Control': 'no-cache' },
     })
-      .then((r) => {
-        if (r.status === 403) return r.json().then((d: { error: string }) => { throw { redirect: true, msg: d.error }; });
+      .then(async (r) => {
+        if (r.status === 403) {
+          const d = await r.json();
+          throw { redirect: true, msg: d.error };
+        }
         if (!r.ok) throw new Error('Failed to load stage');
         return r.json();
       })
       .then((data: StageContentResponse) => { setContent(data); setLoading(false); })
       .catch((e) => {
         if (e?.redirect) {
-          // Redirect to correct stage or handle cancellation
-          // We need participant's current_stage to redirect properly — fetch it
           const t = localStorage.getItem('studentToken');
           if (t) {
-            fetch(`/api/student/me?_t=${Date.now()}`, { cache: 'no-store', headers: { Authorization: `Bearer ${t}`, 'Cache-Control': 'no-cache' } })
+            fetch(`/api/student/me?_t=${Date.now()}`, {
+              cache: 'no-store',
+              headers: { Authorization: `Bearer ${t}`, 'Cache-Control': 'no-cache' },
+            })
               .then((r) => r.ok ? r.json() : null)
               .then((me) => {
                 isNavigatingRef.current = true;
                 if (!me || me.status === 'cancelled') { router.replace('/register'); return; }
                 if (me.currentStage >= 6 || me.status === 'completed') { router.replace('/congratulations'); return; }
-                // Already past this stage — go to next pending stage QR scan
-                if (me.currentStage > stageNumber) {
-                  router.replace(`/qr/scan/${me.currentStage}`);
-                } else if (me.currentStage === stageNumber) {
-                  window.location.reload();
-                } else {
+                if (me.currentStage !== stageNumber) {
                   router.replace(`/stage/${me.currentStage}`);
+                } else {
+                  window.location.reload();
                 }
               })
               .catch(() => router.replace('/register'));
@@ -69,198 +87,146 @@ export default function StagePage() {
         }
       });
 
-    function safeSendBeacon(url: string, payload: unknown) {
-      if (typeof navigator?.sendBeacon !== 'function') return false;
+    function safeSendBeacon(payload: object) {
+      if (typeof navigator?.sendBeacon !== 'function') return;
       try {
-        return navigator.sendBeacon(url, new Blob([JSON.stringify(payload)], { type: 'application/json' }));
-      } catch {
-        return false;
-      }
+        navigator.sendBeacon(
+          '/api/student/dropout',
+          new Blob([JSON.stringify(payload)], { type: 'application/json' }),
+        );
+      } catch { /* ignore */ }
     }
-
-    const hb = setInterval(() => {
-      const t = localStorage.getItem('studentToken');
-      if (t && !document.hidden) {
-        safeSendBeacon('/api/student/heartbeat', { token: t });
-      }
-    }, 2 * 60 * 1000);
 
     function sendDropout(reason: 'dropout_tab_close' | 'dropout_navigation') {
       if (isNavigatingRef.current) return;
       const t = localStorage.getItem('studentToken');
       if (!t) return;
-      safeSendBeacon('/api/student/dropout', { token: t, reason });
+      safeSendBeacon({ token: t, reason });
     }
 
-    function handleBeforeUnload() {
-      sendDropout('dropout_tab_close');
+    // Heartbeat every 2 minutes
+    const hb = setInterval(() => {
+      const t = localStorage.getItem('studentToken');
+      if (t && !document.hidden) safeSendBeacon({ token: t });
+    }, 2 * 60 * 1000);
+
+    // Ban on actual browser/tab close
+    function handleBeforeUnload() { sendDropout('dropout_tab_close'); }
+
+    // Ban on minimize / switch app / switch tab
+    function handleVisibilityChange() {
+      if (document.hidden) sendDropout('dropout_tab_close');
     }
 
-    // NOTE: visibilitychange dropout removed per user request.
-    // Students are only banned when they actually close the browser (beforeunload).
-    // Tab switching and navigation within the app does NOT trigger a ban.
     window.addEventListener('beforeunload', handleBeforeUnload);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     return () => {
       clearInterval(hb);
       window.removeEventListener('beforeunload', handleBeforeUnload);
-      if (visibilityTimerRef.current) clearTimeout(visibilityTimerRef.current);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [router, stageNumber]);
 
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    setApiError('');
-    if (!/^[A-Za-z0-9]{6}$/.test(accessCode)) {
-      setCodeError('Access code must be 6 characters.');
-      return;
-    }
-    setCodeError('');
-    setSubmitting(true);
-    const token = localStorage.getItem('studentToken');
-    try {
-      const res = await fetch(`/api/student/stage/${stageNumber}/submit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ accessCode }),
-      });
-      const data: SubmitAccessCodeResponse = await res.json();
-      if (!res.ok || !data.success) {
-        setApiError(data.error ?? 'Incorrect access code. Please try again.');
-        setSubmitting(false);
-        return;
-      }
-      // Mark as intentional navigation BEFORE doing anything else
-      // This prevents the beforeunload/visibilitychange from firing a dropout beacon
-      isNavigatingRef.current = true;
-      if (visibilityTimerRef.current) {
-        clearTimeout(visibilityTimerRef.current);
-        visibilityTimerRef.current = null;
-      }
-
-      if (data.nextAction?.type === 'scan_qr') {
-        // Use router.push (client-side navigation) — does NOT trigger beforeunload
-        router.push(`/qr/scan/${data.nextAction.nextStage}`);
-      } else {
-        router.push('/congratulations');
-      }
-    } catch {
-      setApiError('Network error. Please try again.');
-      setSubmitting(false);
-    }
+  function goToScan() {
+    isNavigatingRef.current = true;
+    router.push(`/qr/scan/${stageNumber}`);
   }
 
   if (loading) return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    <div className="min-h-screen bg-gray-950 flex flex-col">
       <CollegeHeader />
-      <main className="flex-1 flex items-center justify-center"><p className="text-gray-500">Loading stage…</p></main>
+      <main className="flex-1 flex items-center justify-center">
+        <div className="text-center space-y-3">
+          <div className="w-10 h-10 border-4 border-blue-400 border-t-transparent rounded-full animate-spin mx-auto" />
+          <p className="text-gray-400 text-sm">Loading stage…</p>
+        </div>
+      </main>
       <SessionWarningBanner />
     </div>
   );
 
-  const difficultyColors: Record<string, string> = {
-    'Medium': 'bg-green-100 text-green-800',
-    'Medium-Hard': 'bg-yellow-100 text-yellow-800',
-    'Hard': 'bg-orange-100 text-orange-800',
-    'Very Hard': 'bg-red-100 text-red-800',
-    'Final Boss 🏆': 'bg-purple-100 text-purple-800',
+  const diffColors: Record<string, string> = {
+    Medium: 'bg-green-500/20 text-green-300 border-green-700',
+    'Medium-Hard': 'bg-yellow-500/20 text-yellow-300 border-yellow-700',
+    Hard: 'bg-orange-500/20 text-orange-300 border-orange-700',
+    'Very Hard': 'bg-red-500/20 text-red-300 border-red-700',
+    'Final Boss 🏆': 'bg-purple-500/20 text-purple-300 border-purple-700',
   };
-  const diffClass = difficultyColors[content?.difficulty ?? ''] ?? 'bg-gray-100 text-gray-700';
+  const diffClass = diffColors[content?.difficulty ?? ''] ?? 'bg-gray-700 text-gray-300 border-gray-600';
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    <div className="min-h-screen bg-gray-950 flex flex-col">
       <CollegeHeader />
+
       <main className="flex-1 px-4 py-6 max-w-lg mx-auto w-full space-y-5">
-        <div className="flex items-center gap-3">
-          <h2 className="text-xl font-bold text-gray-800">Stage {stageNumber}</h2>
-          {content && <span className={`text-xs font-semibold px-2 py-1 rounded-full ${diffClass}`}>{content.difficulty}</span>}
+
+        {/* Stage header */}
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <h2 className="text-2xl font-bold text-white">Stage {stageNumber}</h2>
+            <p className="text-gray-400 text-sm mt-0.5">Read the puzzle, find the QR, then scan it.</p>
+          </div>
+          {content?.difficulty && (
+            <span className={`text-xs font-semibold px-3 py-1 rounded-full border ${diffClass}`}>
+              {content.difficulty}
+            </span>
+          )}
         </div>
-        <div className="flex flex-col gap-3">
+
+        {/* Puzzle card */}
+        {content && (
+          <div className="bg-gray-900 border border-gray-700 rounded-2xl p-5 space-y-4">
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">🧩 Puzzle</p>
+              <p className="text-gray-100 text-sm leading-relaxed whitespace-pre-wrap">{content.puzzleText}</p>
+            </div>
+
+            {content.hintText && stageNumber < 5 && (
+              <div className="border-t border-gray-700 pt-4">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">💡 Hint</p>
+                <p className="text-blue-300 text-sm italic">{content.hintText}</p>
+              </div>
+            )}
+
+            {content.wordFragment && stageNumber < 5 && (
+              <div className="border-t border-gray-700 pt-4">
+                <p className="text-xs font-semibold text-amber-500 uppercase tracking-wide mb-2">🔤 Your Word Fragment</p>
+                <div className="bg-amber-900/30 border border-amber-700 rounded-xl p-4 flex items-center justify-center min-h-[4.5rem]">
+                  <p className="text-3xl font-bold text-amber-300 tracking-widest text-center break-words font-mono">
+                    {content.wordFragment}
+                  </p>
+                </div>
+                <p className="text-xs text-amber-600 mt-2 text-center">
+                  Remember this — you will need it at the Final Boss stage!
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Scan QR button — main CTA */}
+        <div className="space-y-2">
           <button
             type="button"
-            onClick={() => {
-              isNavigatingRef.current = true;
-              router.push(`/qr/scan/${stageNumber}`);
-            }}
-            className="text-sm bg-emerald-600 text-white px-3 py-2 rounded-xl hover:bg-emerald-700 transition-colors shadow-lg shadow-emerald-500/20"
+            onClick={goToScan}
+            className="w-full bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white py-4 rounded-2xl text-base font-bold transition-colors shadow-lg shadow-emerald-900/40 flex items-center justify-center gap-3"
           >
-            📷 Scan QR for this stage
+            <span className="text-2xl">📷</span>
+            Found the QR? Scan it now!
           </button>
-          <p className="text-sm text-gray-500 leading-relaxed">
-            Find the place of the next QR / solve the riddle, then scan the QR for verification and type the given ACCESS CODE correctly to go to the next stage.
+          <p className="text-gray-500 text-xs text-center">
+            Solve the puzzle above → find the QR code at the location → tap to scan
           </p>
         </div>
 
-        {content && (
-          <>
-            <div className="bg-white rounded-xl shadow-sm p-5 space-y-4">
-              <div>
-                <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Puzzle</h3>
-                <p className="text-gray-800 text-sm leading-relaxed whitespace-pre-wrap">{content.puzzleText}</p>
-              </div>
-
-              {stageNumber < 5 && content.hintText && (
-                <div className="border-t pt-3">
-                  <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Hint</h3>
-                  <p className="text-blue-700 text-sm italic">{content.hintText}</p>
-                </div>
-              )}
-
-              {stageNumber < 5 && content.wordFragment && (
-                <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
-                  <p className="text-xs font-semibold text-amber-700 uppercase tracking-wide mb-2">Your Word Fragment</p>
-                  <div className="min-h-[4.5rem] flex items-center justify-center px-2">
-                    <p className="text-3xl font-bold text-amber-800 tracking-wide leading-tight text-center break-words max-w-full">
-                      {content.wordFragment}
-                    </p>
-                  </div>
-                  <p className="text-xs text-amber-600 mt-2">Remember this — you will need it at the Final Boss stage!</p>
-                </div>
-              )}
-            </div>
-
-            <form onSubmit={handleSubmit} className="bg-white rounded-xl shadow-sm p-5 space-y-4">
-              <div>
-                <label htmlFor="access-code" className="block text-sm font-medium text-gray-700 mb-1">
-                  Enter Access Code
-                </label>
-                <input
-                  id="access-code"
-                  type="text"
-                  maxLength={6}
-                  autoCapitalize="characters"
-                  value={accessCode}
-                  onChange={(e) => { setAccessCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '')); setCodeError(''); }}
-                  aria-invalid={!!codeError}
-                  aria-describedby={codeError ? 'code-error' : undefined}
-                  className={`w-full px-4 py-3 border rounded-lg text-center text-2xl font-mono tracking-widest focus:outline-none focus:ring-2 min-h-[56px] ${codeError ? 'border-red-400 focus:ring-red-300' : 'border-gray-300 focus:ring-blue-500'}`}
-                  placeholder="XXXXXX"
-                />
-                {codeError && <p id="code-error" role="alert" className="mt-1 text-xs text-red-600">{codeError}</p>}
-              </div>
-
-              {apiError && (
-                <div role="alert" className="bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-                  <p className="text-sm text-red-700">{apiError}</p>
-                </div>
-              )}
-
-              <button
-                type="submit"
-                disabled={submitting}
-                className="w-full bg-blue-600 text-white font-semibold py-3 rounded-lg min-h-[44px] hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {submitting ? 'Checking…' : 'Submit Code'}
-              </button>
-            </form>
-          </>
-        )}
-
-        {apiError && !content && (
-          <div role="alert" className="bg-red-50 border border-red-200 rounded-lg p-4">
-            <p className="text-sm text-red-700">{apiError}</p>
+        {apiError && (
+          <div className="bg-red-900/30 border border-red-700 rounded-xl p-4">
+            <p className="text-red-300 text-sm">{apiError}</p>
           </div>
         )}
       </main>
+
       <SessionWarningBanner />
     </div>
   );
