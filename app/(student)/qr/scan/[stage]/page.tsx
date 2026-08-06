@@ -483,7 +483,7 @@ export default function QRScanPage() {
         {phase === 'scanning' && !errorMsg && (
           <div className="w-full bg-gray-900 border border-gray-700 rounded-xl p-3 text-center">
             <p className="text-gray-400 text-xs">
-              💡 Point camera at QR #{stageNumber} — make sure it's well-lit and fills the frame
+              💡 Point camera at QR #{stageNumber} — make sure it&apos;s well-lit and fills the frame
             </p>
           </div>
         )}

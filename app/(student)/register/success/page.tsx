@@ -59,7 +59,9 @@ export default function RegistrationSuccess() {
     return () => {
       clearInterval(heartbeatInterval);
       window.removeEventListener('beforeunload', handleBeforeUnload);
-      if (visibilityTimerRef.current) clearTimeout(visibilityTimerRef.current);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      const timer = visibilityTimerRef.current;
+      if (timer) clearTimeout(timer);
     };
   }, [router]);
 
