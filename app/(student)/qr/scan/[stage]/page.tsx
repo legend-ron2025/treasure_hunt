@@ -3,16 +3,19 @@
  * Combined QR Scan + Access Code page.
  *
  * Flow per stage:
- *  1. Show camera — student scans the QR for this stage
- *  2. QR decoded correctly → hide camera, show access code input
- *  3. Student enters access code → server verifies
- *  4a. Correct → advance to next stage (go to /qr/scan/[next] or /congratulations)
+ *  1. Auth check → verify student's current_stage matches this stage
+ *  2. Show camera — student scans the QR for this stage
+ *  3. QR decoded correctly → hide camera, show access code input
+ *  4a. Correct → advance to next stage (/qr/scan/[next] or /congratulations)
  *  4b. Wrong → show error, let student retry
  *
- * No window.location.href — only router.push (client-side nav, no beforeunload).
- * No pagehide/visibilitychange — only beforeunload fires dropout beacon.
+ * Camera rules:
+ *  - Camera only starts AFTER auth check passes (phase set to 'loading' by auth effect)
+ *  - Scanner useEffect deps are [stageNumber, scannerKey] only — NOT phase
+ *    (including phase caused an infinite restart loop: loading→scanning→effect reruns→cleanup→restart)
+ *  - canStartRef gates the scanner so it only fires when auth has cleared it
  */
-import { useEffect, useRef, useState, FormEvent } from 'react';
+import { useEffect, useRef, useState, useCallback, FormEvent } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import CollegeHeader from '@/components/CollegeHeader';
 import SessionWarningBanner from '@/components/SessionWarningBanner';
@@ -33,6 +36,9 @@ export default function QRScanPage() {
   const html5QrRef = useRef<any>(null);
   const isNavigatingRef = useRef(false);
   const noDetectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Gate: scanner effect checks this before starting camera.
+  // Auth effect sets it to true once stage is confirmed.
+  const canStartRef = useRef(false);
 
   // ── Auth check ──────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -56,16 +62,17 @@ export default function QRScanPage() {
           return;
         }
         if (me.currentStage !== stageNumber) {
-          // Redirect to the correct stage QR
           isNavigatingRef.current = true;
           router.replace(`/qr/scan/${me.currentStage}`);
         } else {
-          // Stage matches — start scanner
+          // Stage matches — allow scanner to start
+          canStartRef.current = true;
           setPhase('loading');
         }
       })
       .catch(() => {
-        // On error, allow scanner to proceed (fail-open for UX)
+        // On network error, allow scanner to proceed (fail-open for UX)
+        canStartRef.current = true;
         setPhase('loading');
       });
 
@@ -85,27 +92,50 @@ export default function QRScanPage() {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [router, stageNumber]);
 
-  // ── Start scanner when phase = 'loading' ────────────────────────────────────
+  // ── Start scanner ────────────────────────────────────────────────────────────
+  // IMPORTANT: 'phase' is intentionally NOT in the dependency array.
+  // If phase were included, setPhase('scanning') inside would trigger cleanup+restart → infinite loop.
+  // Instead we gate on canStartRef so the scanner only fires after auth clears it.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (phase !== 'loading') return;
+    if (!canStartRef.current) return;
     if (isNaN(stageNumber) || stageNumber < 1 || stageNumber > 5) return;
 
     let qr: any = null;
     let mounted = true;
 
+    // Reset to loading state visually for retry
+    setPhase('loading');
+    setErrorMsg('');
+
     async function start() {
+      // Small delay to let the DOM render the container before html5-qrcode attaches
+      await new Promise((res) => setTimeout(res, 80));
+      if (!mounted) return;
+
       try {
         const { Html5Qrcode } = await import('html5-qrcode');
         if (!mounted) return;
+
+        // Clean up any previous instance
+        if (html5QrRef.current) {
+          try { await html5QrRef.current.stop(); } catch { /* ignore */ }
+          try { html5QrRef.current.clear(); } catch { /* ignore */ }
+          html5QrRef.current = null;
+        }
+
         qr = new Html5Qrcode('qr-video-container');
         html5QrRef.current = qr;
 
         await qr.start(
           { facingMode: 'environment' },
-          { fps: 15, qrbox: { width: 260, height: 260 } },
+          { fps: 10, qrbox: { width: 250, height: 250 } },
           (decodedText: string) => {
             if (!mounted) return;
-            if (noDetectTimerRef.current) { clearTimeout(noDetectTimerRef.current); noDetectTimerRef.current = null; }
+            if (noDetectTimerRef.current) {
+              clearTimeout(noDetectTimerRef.current);
+              noDetectTimerRef.current = null;
+            }
 
             // Check if scanned QR path matches /stage/{stageNumber}
             let path = '';
@@ -115,21 +145,22 @@ export default function QRScanPage() {
 
             if (path === expected || path.endsWith(expected)) {
               qr.stop().catch(() => {});
+              html5QrRef.current = null;
               setPhase('code_entry');
               setErrorMsg('');
             } else {
-              // Wrong QR — show error but keep scanning
+              // Wrong QR — show error, keep scanning
               setErrorMsg(`Wrong QR code. Please find QR #${stageNumber} and scan it.`);
             }
           },
-          () => { /* per-frame error — ignore */ },
+          () => { /* per-frame decode error — ignore */ },
         );
 
         if (mounted) {
           setPhase('scanning');
-          // 60s no-detect prompt
+          // 60s no-detect hint
           noDetectTimerRef.current = setTimeout(() => {
-            if (mounted) setErrorMsg('No QR detected. Move closer and make sure it\'s well lit.');
+            if (mounted) setErrorMsg("No QR detected. Move closer and make sure it's well lit.");
           }, 60_000);
         }
       } catch (err: any) {
@@ -149,10 +180,13 @@ export default function QRScanPage() {
 
     return () => {
       mounted = false;
-      if (noDetectTimerRef.current) clearTimeout(noDetectTimerRef.current);
-      html5QrRef.current?.stop().catch(() => {});
+      if (noDetectTimerRef.current) { clearTimeout(noDetectTimerRef.current); noDetectTimerRef.current = null; }
+      if (html5QrRef.current) {
+        html5QrRef.current.stop().catch(() => {});
+        html5QrRef.current = null;
+      }
     };
-  }, [stageNumber, scannerKey, phase]);
+  }, [stageNumber, scannerKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Submit access code ──────────────────────────────────────────────────────
   async function handleSubmitCode(e: FormEvent) {
@@ -201,7 +235,7 @@ export default function QRScanPage() {
     setErrorMsg('');
     setAccessCode('');
     setCodeError('');
-    setPhase('loading');
+    canStartRef.current = true;
     setScannerKey((k) => k + 1);
   }
 
@@ -214,18 +248,18 @@ export default function QRScanPage() {
 
       <main className="flex-1 flex flex-col items-center px-4 py-6 gap-5 max-w-sm mx-auto w-full">
 
-        {/* Stage header */}
+        {/* Stage header — hidden while verifying */}
         {phase !== 'verifying' && (
-        <div className="text-center w-full">
-          <h2 className="text-2xl font-bold text-white">
-            {phase === 'code_entry' || phase === 'submitting' || phase === 'success'
-              ? `🔑 Stage ${stageNumber} — Enter Code`
-              : `📷 Stage ${stageNumber} — Scan QR`}
-          </h2>
-          <p className="text-gray-400 text-sm mt-1">
-            {stageLabels[stageNumber]} · <span className="text-blue-400">{stageDiffs[stageNumber]}</span>
-          </p>
-        </div>
+          <div className="text-center w-full">
+            <h2 className="text-2xl font-bold text-white">
+              {phase === 'code_entry' || phase === 'submitting' || phase === 'success'
+                ? `🔑 Stage ${stageNumber} — Enter Code`
+                : `📷 Stage ${stageNumber} — Scan QR`}
+            </h2>
+            <p className="text-gray-400 text-sm mt-1">
+              {stageLabels[stageNumber]} · <span className="text-blue-400">{stageDiffs[stageNumber]}</span>
+            </p>
+          </div>
         )}
 
         {/* ── VERIFYING AUTH ── */}
@@ -238,7 +272,7 @@ export default function QRScanPage() {
           </div>
         )}
 
-        {/* ── SCANNING PHASE ── */}
+        {/* ── SCANNING PHASE (camera container always in DOM when scanning) ── */}
         {(phase === 'loading' || phase === 'scanning') && (
           <>
             <div className="relative w-full">
@@ -247,7 +281,7 @@ export default function QRScanPage() {
               <div className="absolute top-2 right-2 w-8 h-8 border-t-4 border-r-4 border-blue-400 rounded-tr-lg z-10 pointer-events-none" />
               <div className="absolute bottom-2 left-2 w-8 h-8 border-b-4 border-l-4 border-blue-400 rounded-bl-lg z-10 pointer-events-none" />
               <div className="absolute bottom-2 right-2 w-8 h-8 border-b-4 border-r-4 border-blue-400 rounded-br-lg z-10 pointer-events-none" />
-              {/* Camera */}
+              {/* Camera container — html5-qrcode injects video into this div */}
               <div
                 id="qr-video-container"
                 className="w-full rounded-2xl overflow-hidden bg-black shadow-2xl"
@@ -274,12 +308,29 @@ export default function QRScanPage() {
             {errorMsg && (
               <div className="w-full bg-red-900/40 border border-red-700 rounded-2xl p-4 text-center space-y-3">
                 <p className="text-red-300 text-sm">{errorMsg}</p>
-                <button onClick={retryScanner} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-xl text-sm font-medium transition-colors">
+                <button
+                  onClick={retryScanner}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-xl text-sm font-medium transition-colors"
+                >
                   🔄 Try Again
                 </button>
               </div>
             )}
           </>
+        )}
+
+        {/* ── CAMERA ERROR ── */}
+        {phase === 'error' && (
+          <div className="w-full bg-red-900/40 border border-red-700 rounded-2xl p-5 text-center space-y-3">
+            <p className="text-4xl">⚠️</p>
+            <p className="text-red-300 text-sm">{errorMsg}</p>
+            <button
+              onClick={retryScanner}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-xl text-sm font-medium transition-colors"
+            >
+              🔄 Try Again
+            </button>
+          </div>
         )}
 
         {/* ── CAMERA DENIED ── */}
@@ -288,7 +339,10 @@ export default function QRScanPage() {
             <p className="text-4xl">📵</p>
             <p className="text-red-300 text-sm">{errorMsg}</p>
             <p className="text-gray-500 text-xs">Chrome: tap 🔒 → Camera → Allow, then reload.</p>
-            <button onClick={() => window.location.reload()} className="w-full bg-gray-700 hover:bg-gray-600 text-white py-2 rounded-xl text-sm transition-colors">
+            <button
+              onClick={() => window.location.reload()}
+              className="w-full bg-gray-700 hover:bg-gray-600 text-white py-2 rounded-xl text-sm transition-colors"
+            >
               Reload Page
             </button>
           </div>
@@ -304,19 +358,26 @@ export default function QRScanPage() {
 
             <form onSubmit={handleSubmitCode} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2 text-center">Access Code</label>
+                <label className="block text-sm font-medium text-gray-300 mb-2 text-center">
+                  Access Code
+                </label>
                 <input
                   type="text"
                   maxLength={6}
                   autoCapitalize="characters"
                   autoFocus
                   value={accessCode}
-                  onChange={(e) => { setAccessCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '')); setCodeError(''); }}
+                  onChange={(e) => {
+                    setAccessCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''));
+                    setCodeError('');
+                  }}
                   disabled={phase === 'submitting'}
                   className="w-full bg-gray-800 border border-gray-600 rounded-2xl px-4 py-4 text-white text-3xl font-mono tracking-[0.3em] text-center focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50"
                   placeholder="XXXXXX"
                 />
-                {codeError && <p className="text-red-400 text-sm mt-2 text-center">{codeError}</p>}
+                {codeError && (
+                  <p className="text-red-400 text-sm mt-2 text-center">{codeError}</p>
+                )}
               </div>
 
               <button
@@ -353,7 +414,9 @@ export default function QRScanPage() {
         {/* Hint */}
         {phase === 'scanning' && !errorMsg && (
           <div className="w-full bg-gray-900 border border-gray-700 rounded-xl p-3 text-center">
-            <p className="text-gray-400 text-xs">💡 Make sure QR #{stageNumber} is well-lit and fills the camera frame</p>
+            <p className="text-gray-400 text-xs">
+              💡 Make sure QR #{stageNumber} is well-lit and fills the camera frame
+            </p>
           </div>
         )}
       </main>
