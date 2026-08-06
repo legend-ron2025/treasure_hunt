@@ -85,9 +85,8 @@ export default function QRScanPage() {
       }
     }
 
+    // Only ban on actual browser close — NOT on tab switch
     window.addEventListener('beforeunload', handleBeforeUnload);
-    window.addEventListener('pagehide', handleBeforeUnload);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     async function startScanner() {
       try {
@@ -108,13 +107,14 @@ export default function QRScanPage() {
 
             if (isCorrectQr(decodedText)) {
               matchedRef.current = true;
-              isNavigatingRef.current = true;
+              isNavigatingRef.current = true; // prevent dropout beacon
               setStatus('matched');
               setError(null);
               qr.stop().catch(() => {});
+              // Small delay to show the "QR Matched" overlay, then navigate
               setTimeout(() => {
-                window.location.href = `${window.location.origin}/stage/${stageNumber}`;
-              }, 500);
+                router.push(`/stage/${stageNumber}`);
+              }, 600);
             } else {
               setStatus('scanning');
               setError('Wrong QR code. Please scan the correct QR for this stage.');
@@ -153,8 +153,6 @@ export default function QRScanPage() {
       if (visibilityTimerRef.current) clearTimeout(visibilityTimerRef.current);
       html5QrCodeRef.current?.stop().catch(() => {});
       window.removeEventListener('beforeunload', handleBeforeUnload);
-      window.removeEventListener('pagehide', handleBeforeUnload);
-      window.removeEventListener('visibilitychange', handleVisibilityChange);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stageNumber, scannerKey]);
@@ -203,22 +201,26 @@ export default function QRScanPage() {
       }
 
       isNavigatingRef.current = true;
+      if (visibilityTimerRef.current) {
+        clearTimeout(visibilityTimerRef.current);
+        visibilityTimerRef.current = null;
+      }
       if (data.nextAction?.type === 'scan_qr' && data.nextAction.nextStage) {
-        window.location.href = `${window.location.origin}/stage/${data.nextAction.nextStage}`;
+        router.push(`/qr/scan/${data.nextAction.nextStage}`);
         return;
       }
 
       if (data.nextAction?.type === 'congratulations') {
-        window.location.href = `${window.location.origin}/congratulations`;
+        router.push('/congratulations');
         return;
       }
 
       if (data.nextAction?.type === 'goto_stage' && data.nextAction.nextStage) {
-        window.location.href = `${window.location.origin}/stage/${data.nextAction.nextStage}`;
+        router.push(`/stage/${data.nextAction.nextStage}`);
         return;
       }
 
-      window.location.href = `${window.location.origin}/stage/${stageNumber}`;
+      router.push(`/stage/${stageNumber}`);
     } catch (err: any) {
       setAccessError('Network error. Please try again.');
       setShowAccessModal(false);

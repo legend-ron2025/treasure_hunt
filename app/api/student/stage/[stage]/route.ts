@@ -15,6 +15,12 @@ import type { StageContentResponse } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
+const NO_CACHE_HEADERS = {
+  'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+  Pragma: 'no-cache',
+  Expires: '0',
+};
+
 export async function GET(
   request: NextRequest,
   { params }: { params: { stage: string } },
@@ -24,17 +30,17 @@ export async function GET(
 
   const stageNumber = parseInt(params.stage, 10);
   if (isNaN(stageNumber) || stageNumber < 1 || stageNumber > 5) {
-    return NextResponse.json({ error: 'Invalid stage number.' }, { status: 400 });
+    return NextResponse.json({ error: 'Invalid stage number.' }, { status: 400, headers: NO_CACHE_HEADERS });
   }
 
   const participant = await getParticipantById(auth.participantId);
   if (!participant) {
-    return NextResponse.json({ error: 'Participant not found.' }, { status: 404 });
+    return NextResponse.json({ error: 'Participant not found.' }, { status: 404, headers: NO_CACHE_HEADERS });
   }
   if (participant.status === 'cancelled') {
     return NextResponse.json(
       { error: 'Your registration was cancelled. You cannot re-register.' },
-      { status: 403 },
+      { status: 403, headers: NO_CACHE_HEADERS },
     );
   }
 
@@ -42,19 +48,19 @@ export async function GET(
   if (stageNumber > participant.current_stage) {
     return NextResponse.json(
       { error: 'Please complete your current stage first.' },
-      { status: 403 },
+      { status: 403, headers: NO_CACHE_HEADERS },
     );
   }
   if (stageNumber < participant.current_stage) {
     return NextResponse.json(
       { error: 'You have already completed this stage.' },
-      { status: 403 },
+      { status: 403, headers: NO_CACHE_HEADERS },
     );
   }
 
   const content = await getStageContent(stageNumber);
   if (!content) {
-    return NextResponse.json({ error: 'Stage not found.' }, { status: 404 });
+    return NextResponse.json({ error: 'Stage not found.' }, { status: 404, headers: NO_CACHE_HEADERS });
   }
 
   const body: StageContentResponse = {
@@ -65,5 +71,5 @@ export async function GET(
     wordFragment: content.word_fragment,
   };
 
-  return NextResponse.json(body);
+  return NextResponse.json(body, { headers: NO_CACHE_HEADERS });
 }

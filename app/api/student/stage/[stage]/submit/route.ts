@@ -15,6 +15,12 @@ import type { SubmitAccessCodeResponse } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
+const NO_CACHE_HEADERS = {
+  'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+  Pragma: 'no-cache',
+  Expires: '0',
+};
+
 export async function POST(
   request: NextRequest,
   { params }: { params: { stage: string } },
@@ -24,7 +30,7 @@ export async function POST(
 
   const stageNumber = parseInt(params.stage, 10);
   if (isNaN(stageNumber) || stageNumber < 1 || stageNumber > 5) {
-    return NextResponse.json({ error: 'Invalid stage number.' }, { status: 400 });
+    return NextResponse.json({ error: 'Invalid stage number.' }, { status: 400, headers: NO_CACHE_HEADERS });
   }
 
   // Parse body
@@ -32,26 +38,26 @@ export async function POST(
   try {
     body = await request.json();
   } catch {
-    return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
+    return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400, headers: NO_CACHE_HEADERS });
   }
 
   const parsed = submitAccessCodeRequestSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json(
       { error: 'Access code must be 6 characters.' },
-      { status: 400 },
+      { status: 400, headers: NO_CACHE_HEADERS },
     );
   }
 
   // Participant check
   const participant = await getParticipantById(auth.participantId);
   if (!participant) {
-    return NextResponse.json({ error: 'Participant not found.' }, { status: 404 });
+    return NextResponse.json({ error: 'Participant not found.' }, { status: 404, headers: NO_CACHE_HEADERS });
   }
   if (participant.status === 'cancelled') {
     return NextResponse.json(
       { error: 'Your registration was cancelled. You cannot re-register.' },
-      { status: 403 },
+      { status: 403, headers: NO_CACHE_HEADERS },
     );
   }
 
@@ -59,14 +65,17 @@ export async function POST(
   if (stageNumber > participant.current_stage) {
     return NextResponse.json(
       { error: 'Please complete your current stage first.' },
-      { status: 403 },
+      { status: 403, headers: NO_CACHE_HEADERS },
     );
   }
   if (stageNumber < participant.current_stage) {
-    return NextResponse.json(
-      { error: 'You have already completed this stage.' },
-      { status: 403 },
-    );
+    // Already completed this stage — transition student forward to their active stage
+    const nextAction: SubmitAccessCodeResponse['nextAction'] =
+      participant.current_stage <= 5
+        ? { type: 'scan_qr', nextStage: participant.current_stage }
+        : { type: 'congratulations' };
+    const res: SubmitAccessCodeResponse = { success: true, nextAction };
+    return NextResponse.json(res, { headers: NO_CACHE_HEADERS });
   }
 
   // Verify access code (case-insensitive)
@@ -76,7 +85,7 @@ export async function POST(
       success: false,
       error: 'Incorrect access code. Please try again.',
     };
-    return NextResponse.json(res, { status: 422 });
+    return NextResponse.json(res, { status: 422, headers: NO_CACHE_HEADERS });
   }
 
   // Advance participant to next stage
@@ -89,5 +98,5 @@ export async function POST(
       : { type: 'congratulations' };
 
   const res: SubmitAccessCodeResponse = { success: true, nextAction };
-  return NextResponse.json(res);
+  return NextResponse.json(res, { headers: NO_CACHE_HEADERS });
 }

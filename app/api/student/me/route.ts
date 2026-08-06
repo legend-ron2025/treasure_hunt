@@ -8,13 +8,19 @@ import type { StudentMeResponse } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
+const NO_CACHE_HEADERS = {
+  'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+  Pragma: 'no-cache',
+  Expires: '0',
+};
+
 export async function GET(request: NextRequest) {
   const auth = await requireStudentAuth(request);
   if (isAuthError(auth)) return auth;
 
   const participant = await getParticipantById(auth.participantId);
   if (!participant) {
-    return NextResponse.json({ error: 'Participant not found.' }, { status: 404 });
+    return NextResponse.json({ error: 'Participant not found.' }, { status: 404, headers: NO_CACHE_HEADERS });
   }
 
   // If current_stage has advanced to 6, ensure status is marked completed
@@ -42,5 +48,5 @@ export async function GET(request: NextRequest) {
         : undefined,
   };
 
-  return NextResponse.json(body);
+  return NextResponse.json(body, { headers: NO_CACHE_HEADERS });
 }

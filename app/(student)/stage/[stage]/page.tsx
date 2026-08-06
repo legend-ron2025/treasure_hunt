@@ -25,24 +25,12 @@ export default function StagePage() {
       return;
     }
 
-    // Redirect to canonical domain if necessary (handles old/deleted QR links)
-    try {
-      const canonical = process.env.NEXT_PUBLIC_BASE_URL;
-      if (canonical && typeof window !== 'undefined') {
-        const canonicalHost = new URL(canonical).host.replace(/:\d+$/, '');
-        if (window.location.host.replace(/:\d+$/, '') !== canonicalHost) {
-          window.location.replace(canonical.replace(/\/$/, '') + window.location.pathname + window.location.search);
-          return;
-        }
-      }
-    } catch (e) {
-      // ignore
-    }
     const token = localStorage.getItem('studentToken');
     if (!token) { router.replace('/register'); return; }
 
-    fetch(`/api/student/stage/${stageNumber}`, {
-      headers: { Authorization: `Bearer ${token}` },
+    fetch(`/api/student/stage/${stageNumber}?_t=${Date.now()}`, {
+      cache: 'no-store',
+      headers: { Authorization: `Bearer ${token}`, 'Cache-Control': 'no-cache' },
     })
       .then((r) => {
         if (r.status === 403) return r.json().then((d: { error: string }) => { throw { redirect: true, msg: d.error }; });
@@ -56,14 +44,17 @@ export default function StagePage() {
           // We need participant's current_stage to redirect properly — fetch it
           const t = localStorage.getItem('studentToken');
           if (t) {
-            fetch('/api/student/me', { headers: { Authorization: `Bearer ${t}` } })
+            fetch(`/api/student/me?_t=${Date.now()}`, { cache: 'no-store', headers: { Authorization: `Bearer ${t}`, 'Cache-Control': 'no-cache' } })
               .then((r) => r.ok ? r.json() : null)
-                  .then((me) => {
+              .then((me) => {
+                isNavigatingRef.current = true;
                 if (!me || me.status === 'cancelled') { router.replace('/register'); return; }
                 if (me.currentStage >= 6 || me.status === 'completed') { router.replace('/congratulations'); return; }
                 // Already past this stage — go to next pending stage QR scan
                 if (me.currentStage > stageNumber) {
                   router.replace(`/qr/scan/${me.currentStage}`);
+                } else if (me.currentStage === stageNumber) {
+                  window.location.reload();
                 } else {
                   router.replace(`/stage/${me.currentStage}`);
                 }
@@ -105,25 +96,13 @@ export default function StagePage() {
       sendDropout('dropout_tab_close');
     }
 
-    function handleVisibilityChange() {
-      const t = localStorage.getItem('studentToken');
-      if (!t) return;
-      if (document.hidden) {
-        visibilityTimerRef.current = window.setTimeout(() => {
-          sendDropout('dropout_navigation');
-        }, 5000);
-      } else {
-        if (visibilityTimerRef.current) { clearTimeout(visibilityTimerRef.current); visibilityTimerRef.current = null; }
-      }
-    }
+    // NOTE: visibilitychange dropout removed per user request.
+    // Students are only banned when they actually close the browser (beforeunload).
+    // Tab switching and navigation within the app does NOT trigger a ban.
     window.addEventListener('beforeunload', handleBeforeUnload);
-    window.addEventListener('pagehide', handleBeforeUnload);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => {
       clearInterval(hb);
       window.removeEventListener('beforeunload', handleBeforeUnload);
-      window.removeEventListener('pagehide', handleBeforeUnload);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
       if (visibilityTimerRef.current) clearTimeout(visibilityTimerRef.current);
     };
   }, [router, stageNumber]);
@@ -147,17 +126,25 @@ export default function StagePage() {
       const data: SubmitAccessCodeResponse = await res.json();
       if (!res.ok || !data.success) {
         setApiError(data.error ?? 'Incorrect access code. Please try again.');
+        setSubmitting(false);
         return;
       }
+      // Mark as intentional navigation BEFORE doing anything else
+      // This prevents the beforeunload/visibilitychange from firing a dropout beacon
       isNavigatingRef.current = true;
-      if (data.nextAction?.type === 'scan_qr') {
-        window.location.href = `${window.location.origin}/qr/scan/${data.nextAction.nextStage}`;
-        return;
+      if (visibilityTimerRef.current) {
+        clearTimeout(visibilityTimerRef.current);
+        visibilityTimerRef.current = null;
       }
-      window.location.href = `${window.location.origin}/congratulations`;
+
+      if (data.nextAction?.type === 'scan_qr') {
+        // Use router.push (client-side navigation) — does NOT trigger beforeunload
+        router.push(`/qr/scan/${data.nextAction.nextStage}`);
+      } else {
+        router.push('/congratulations');
+      }
     } catch {
       setApiError('Network error. Please try again.');
-    } finally {
       setSubmitting(false);
     }
   }
