@@ -292,16 +292,35 @@ export default function QRScanPage() {
       isNavigatingRef.current = true;
       setPhase('success');
 
-      setTimeout(() => {
-        if (data.nextAction?.type === 'scan_qr') {
-          // Go to stage puzzle page first (not directly to scan)
-          // Store flag so stage page skips stale DB read-after-write check
-          sessionStorage.setItem('advancedToStage', String(data.nextAction.nextStage));
-          router.push(`/stage/${data.nextAction.nextStage}`);
+      if (data.nextAction?.type === 'scan_qr') {
+        const nextStage = data.nextAction.nextStage;
+        sessionStorage.setItem('advancedToStage', String(nextStage));
+
+        // Pre-fetch next stage content NOW (DB write already committed at this point)
+        // and cache it so the stage page never needs to re-fetch, avoiding
+        // Neon read-after-write lag that causes 403 → redirect back to stage 1
+        const token = localStorage.getItem('studentToken');
+        if (token) {
+          fetch(`/api/student/stage/${nextStage}?_t=${Date.now()}`, {
+            cache: 'no-store',
+            headers: { Authorization: `Bearer ${token}`, 'Cache-Control': 'no-cache' },
+          })
+            .then((r) => r.ok ? r.json() : null)
+            .then((nextContent) => {
+              if (nextContent) {
+                sessionStorage.setItem(`stageContent_${nextStage}`, JSON.stringify(nextContent));
+              }
+            })
+            .catch(() => { /* prefetch failed — stage page will retry */ })
+            .finally(() => {
+              setTimeout(() => router.push(`/stage/${nextStage}`), 900);
+            });
         } else {
-          router.push('/congratulations');
+          setTimeout(() => router.push(`/stage/${nextStage}`), 900);
         }
-      }, 900);
+      } else {
+        setTimeout(() => router.push('/congratulations'), 900);
+      }
     } catch {
       setPhase('code_entry');
       setCodeError('Network error. Please try again.');

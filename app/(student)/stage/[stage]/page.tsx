@@ -38,15 +38,32 @@ export default function StagePage() {
     const token = localStorage.getItem('studentToken');
     if (!token) { router.replace('/register'); return; }
 
+    // Wrap in async so we can await the cache fallback delay
+    async function init() {
     // Check sessionStorage flag set by qr/scan page after successful submit.
-    // When this flag is present and matches, the DB write may not have propagated
-    // yet (Neon serverless read-after-write lag), so we retry the stage fetch
-    // after a short delay instead of immediately hitting a stale 403.
+    // When this flag is present and matches, use cached stage content — never
+    // hit the DB (avoids Neon read-after-write lag causing 403 → redirect to stage 1).
     const advancedTo = sessionStorage.getItem('advancedToStage');
     const justAdvanced = advancedTo && parseInt(advancedTo, 10) === stageNumber;
-    if (justAdvanced) sessionStorage.removeItem('advancedToStage');
 
-    async function loadStage(retryCount = 0) {
+    if (justAdvanced) {
+      sessionStorage.removeItem('advancedToStage');
+      const cached = sessionStorage.getItem(`stageContent_${stageNumber}`);
+      sessionStorage.removeItem(`stageContent_${stageNumber}`);
+
+      if (cached) {
+        try {
+          const data: StageContentResponse = JSON.parse(cached);
+          setContent(data);
+          setLoading(false);
+          return; // ✅ Done — no DB call needed
+        } catch { /* fall through to normal fetch */ }
+      }
+      // No cache — wait 800ms for DB to propagate then fetch once
+      await new Promise((r) => setTimeout(r, 800));
+    }
+
+    async function loadStage() {
       try {
         const res = await fetch(`/api/student/stage/${stageNumber}?_t=${Date.now()}`, {
           cache: 'no-store',
@@ -61,15 +78,8 @@ export default function StagePage() {
         }
 
         if (res.status === 403) {
-          // If we just advanced here, retry up to 5 times with increasing delay
-          // to give the DB write time to propagate
-          if (justAdvanced && retryCount < 5) {
-            await new Promise((r) => setTimeout(r, 300 * (retryCount + 1)));
-            return loadStage(retryCount + 1);
-          }
-          // No more retries — fetch me to determine correct redirect
-          const d = await res.json();
-          throw { redirect: true, msg: d.error };
+          const d = await res.json().catch(() => ({}));
+          throw { redirect: true, msg: (d as any).error };
         }
 
         throw new Error('Failed to load stage');
@@ -104,6 +114,9 @@ export default function StagePage() {
     }
 
     loadStage();
+    } // end init()
+
+    init();
 
     function safeSendBeacon(payload: object) {
       if (typeof navigator?.sendBeacon !== 'function') return;
