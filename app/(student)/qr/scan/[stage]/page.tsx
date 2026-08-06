@@ -60,6 +60,25 @@ export default function QRScanPage() {
 
     async function verify() {
       try {
+        // If we just advanced to this stage from a successful submit,
+        // trust the submit result — skip the DB check to avoid read-after-write
+        // lag on Neon's connection pool causing a false redirect back.
+        const advancedTo = sessionStorage.getItem('advancedToStage');
+        if (advancedTo && parseInt(advancedTo, 10) === stageNumber) {
+          sessionStorage.removeItem('advancedToStage');
+          // Still fetch stage content (puzzle/hint/fragment) — but don't validate stage
+          const stageRes = await fetch(`/api/student/stage/${stageNumber}?_t=${Date.now()}`, {
+            cache: 'no-store',
+            headers: { Authorization: `Bearer ${token}`, 'Cache-Control': 'no-cache' },
+          });
+          if (stageRes.ok) {
+            const content: StageContentResponse = await stageRes.json();
+            setStageContent(content);
+          }
+          setStartTrigger(1);
+          return;
+        }
+
         // Fetch both in parallel
         const [meRes, stageRes] = await Promise.all([
           fetch(`/api/student/me?_t=${Date.now()}`, {
@@ -256,6 +275,9 @@ export default function QRScanPage() {
 
       setTimeout(() => {
         if (data.nextAction?.type === 'scan_qr') {
+          // Store the expected next stage so the auth check on the next page
+          // skips the DB read (avoids redirect back due to read-after-write lag)
+          sessionStorage.setItem('advancedToStage', String(data.nextAction.nextStage));
           router.push(`/qr/scan/${data.nextAction.nextStage}`);
         } else {
           router.push('/congratulations');
@@ -276,7 +298,6 @@ export default function QRScanPage() {
 
   // ── UI helpers ───────────────────────────────────────────────────────────────
   const stageLabels = ['', 'Binary Decoder', 'Mirror Text', 'Password Challenge', 'Caesar Cipher', 'Final Boss 🏆'];
-  const stageDiffs  = ['', 'Medium', 'Medium-Hard', 'Hard', 'Very Hard', 'Final Boss'];
   const diffColors: Record<string, string> = {
     Medium: 'bg-green-500/20 text-green-300',
     'Medium-Hard': 'bg-yellow-500/20 text-yellow-300',
