@@ -38,27 +38,42 @@ export default function StagePage() {
     const token = localStorage.getItem('studentToken');
     if (!token) { router.replace('/register'); return; }
 
-    // Check sessionStorage flag set by qr/scan page after successful submit
-    // This lets us skip the stale DB read-after-write on Neon's connection pool
+    // Check sessionStorage flag set by qr/scan page after successful submit.
+    // When this flag is present and matches, the DB write may not have propagated
+    // yet (Neon serverless read-after-write lag), so we retry the stage fetch
+    // after a short delay instead of immediately hitting a stale 403.
     const advancedTo = sessionStorage.getItem('advancedToStage');
-    if (advancedTo && parseInt(advancedTo, 10) === stageNumber) {
-      sessionStorage.removeItem('advancedToStage');
-    }
+    const justAdvanced = advancedTo && parseInt(advancedTo, 10) === stageNumber;
+    if (justAdvanced) sessionStorage.removeItem('advancedToStage');
 
-    fetch(`/api/student/stage/${stageNumber}?_t=${Date.now()}`, {
-      cache: 'no-store',
-      headers: { Authorization: `Bearer ${token}`, 'Cache-Control': 'no-cache' },
-    })
-      .then(async (r) => {
-        if (r.status === 403) {
-          const d = await r.json();
+    async function loadStage(retryCount = 0) {
+      try {
+        const res = await fetch(`/api/student/stage/${stageNumber}?_t=${Date.now()}`, {
+          cache: 'no-store',
+          headers: { Authorization: `Bearer ${token}`, 'Cache-Control': 'no-cache' },
+        });
+
+        if (res.ok) {
+          const data: StageContentResponse = await res.json();
+          setContent(data);
+          setLoading(false);
+          return;
+        }
+
+        if (res.status === 403) {
+          // If we just advanced here, retry up to 5 times with increasing delay
+          // to give the DB write time to propagate
+          if (justAdvanced && retryCount < 5) {
+            await new Promise((r) => setTimeout(r, 300 * (retryCount + 1)));
+            return loadStage(retryCount + 1);
+          }
+          // No more retries — fetch me to determine correct redirect
+          const d = await res.json();
           throw { redirect: true, msg: d.error };
         }
-        if (!r.ok) throw new Error('Failed to load stage');
-        return r.json();
-      })
-      .then((data: StageContentResponse) => { setContent(data); setLoading(false); })
-      .catch((e) => {
+
+        throw new Error('Failed to load stage');
+      } catch (e: any) {
         if (e?.redirect) {
           const t = localStorage.getItem('studentToken');
           if (t) {
@@ -85,7 +100,10 @@ export default function StagePage() {
           setApiError('Failed to load stage content.');
           setLoading(false);
         }
-      });
+      }
+    }
+
+    loadStage();
 
     function safeSendBeacon(payload: object) {
       if (typeof navigator?.sendBeacon !== 'function') return;
