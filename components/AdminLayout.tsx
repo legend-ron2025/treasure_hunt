@@ -224,14 +224,14 @@ export function AdminLayout({ children, title, headerRight }: AdminLayoutProps) 
       {/* Mobile drawer */}
       <MobileDrawer open={mobileOpen} onClose={() => setMobileOpen(false)} />
 
-      {/* Main content */}
-      <div className="flex-1 flex flex-col min-h-screen md:ml-64">
+      {/* Main content — on desktop offset by sidebar width */}
+      <div className="flex-1 flex flex-col min-h-screen w-full md:pl-64">
         {/* Top bar */}
-        <header className="bg-gray-900 border-b border-gray-800 px-4 md:px-6 py-4 flex items-center justify-between sticky top-0 z-10">
-          <div className="flex items-center gap-3">
+        <header className="bg-gray-900 border-b border-gray-800 px-4 md:px-6 py-4 flex items-center justify-between sticky top-0 z-10 w-full">
+          <div className="flex items-center gap-3 min-w-0">
             {/* Hamburger — mobile only */}
             <button
-              className="md:hidden text-gray-400 hover:text-white p-2 rounded-lg hover:bg-gray-800 transition-colors"
+              className="md:hidden text-gray-400 hover:text-white p-2 rounded-lg hover:bg-gray-800 transition-colors flex-shrink-0"
               onClick={() => setMobileOpen(true)}
               aria-label="Open menu"
             >
@@ -244,14 +244,14 @@ export function AdminLayout({ children, title, headerRight }: AdminLayoutProps) 
             <h1 className="text-white font-bold text-base md:text-lg truncate">{title}</h1>
           </div>
           {headerRight && (
-            <div className="flex items-center gap-2 md:gap-3 flex-shrink-0">
+            <div className="flex items-center gap-2 md:gap-3 flex-shrink-0 ml-3">
               {headerRight}
             </div>
           )}
         </header>
 
         {/* Page content */}
-        <main className="flex-1 p-4 md:p-6">
+        <main className="flex-1 p-4 md:p-6 w-full">
           {children}
         </main>
       </div>

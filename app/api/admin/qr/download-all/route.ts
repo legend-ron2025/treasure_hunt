@@ -90,7 +90,7 @@ export async function GET(request: NextRequest) {
     return new NextResponse(new Uint8Array(zipBuffer), {
       headers: {
         'Content-Type': 'application/zip',
-        'Content-Disposition': 'attachment; filename="NMIET-treasure-hunt-qr-codes.zip"',
+        'Content-Disposition': 'attachment; filename="VKM-treasure-hunt-qr-codes.zip"',
         'Content-Length': String(zipBuffer.length),
         'Cache-Control': 'no-store',
       },
