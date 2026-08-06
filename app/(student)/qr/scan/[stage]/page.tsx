@@ -1,391 +1,364 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+/**
+ * Combined QR Scan + Access Code page.
+ *
+ * Flow per stage:
+ *  1. Show camera — student scans the QR for this stage
+ *  2. QR decoded correctly → hide camera, show access code input
+ *  3. Student enters access code → server verifies
+ *  4a. Correct → advance to next stage (go to /qr/scan/[next] or /congratulations)
+ *  4b. Wrong → show error, let student retry
+ *
+ * No window.location.href — only router.push (client-side nav, no beforeunload).
+ * No pagehide/visibilitychange — only beforeunload fires dropout beacon.
+ */
+import { useEffect, useRef, useState, FormEvent } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import CollegeHeader from '@/components/CollegeHeader';
 import SessionWarningBanner from '@/components/SessionWarningBanner';
+
+type Phase = 'verifying' | 'loading' | 'scanning' | 'code_entry' | 'submitting' | 'success' | 'error' | 'denied';
 
 export default function QRScanPage() {
   const router = useRouter();
   const params = useParams<{ stage: string }>();
   const stageNumber = parseInt(params.stage, 10);
 
-  const [error, setError] = useState<string | null>(null);
-  const [status, setStatus] = useState<'idle' | 'starting' | 'scanning' | 'mismatch' | 'denied' | 'matched'>('idle');
-  const [showAccessModal, setShowAccessModal] = useState(false);
+  const [phase, setPhase] = useState<Phase>('verifying');
+  const [errorMsg, setErrorMsg] = useState('');
   const [accessCode, setAccessCode] = useState('');
-  const [accessError, setAccessError] = useState('');
-  const [verifying, setVerifying] = useState(false);
+  const [codeError, setCodeError] = useState('');
   const [scannerKey, setScannerKey] = useState(0);
-  const noDetectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const visibilityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const matchedRef = useRef(false);
-  const html5QrCodeRef = useRef<any>(null);
+
+  const html5QrRef = useRef<any>(null);
   const isNavigatingRef = useRef(false);
+  const noDetectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  function isCorrectQr(decoded: string): boolean {
-    try {
-      const path = new URL(decoded).pathname.replace(/\/$/, '');
-      return path === `/stage/${stageNumber}`;
-    } catch {
-      return decoded.trim().replace(/\/$/, '') === `/stage/${stageNumber}`;
-    }
-  }
-
+  // ── Auth check ──────────────────────────────────────────────────────────────
   useEffect(() => {
     const token = localStorage.getItem('studentToken');
     if (!token) { router.replace('/register'); return; }
-    if (isNaN(stageNumber) || stageNumber < 1 || stageNumber > 5) { router.replace('/register'); return; }
-
-    // Redirect to canonical domain if this page was opened from an old/deleted deployment
-    try {
-      const canonical = process.env.NEXT_PUBLIC_BASE_URL;
-      if (canonical && typeof window !== 'undefined') {
-        const canonicalHost = new URL(canonical).host.replace(/:\d+$/, '');
-        if (window.location.host.replace(/:\d+$/, '') !== canonicalHost) {
-          window.location.replace(canonical.replace(/\/$/, '') + window.location.pathname + window.location.search);
-          return;
-        }
-      }
-    } catch (e) {
-      // ignore
+    if (isNaN(stageNumber) || stageNumber < 1 || stageNumber > 5) {
+      router.replace('/register'); return;
     }
 
-    setStatus('starting');
-    setError(null);
+    // Verify student's current_stage matches the requested stage
+    fetch(`/api/student/me?_t=${Date.now()}`, {
+      cache: 'no-store',
+      headers: { Authorization: `Bearer ${token}`, 'Cache-Control': 'no-cache' },
+    })
+      .then((r) => r.ok ? r.json() : null)
+      .then((me) => {
+        if (!me || me.status === 'cancelled') { router.replace('/register'); return; }
+        if (me.currentStage >= 6 || me.status === 'completed') {
+          isNavigatingRef.current = true;
+          router.replace('/congratulations');
+          return;
+        }
+        if (me.currentStage !== stageNumber) {
+          // Redirect to the correct stage QR
+          isNavigatingRef.current = true;
+          router.replace(`/qr/scan/${me.currentStage}`);
+        } else {
+          // Stage matches — start scanner
+          setPhase('loading');
+        }
+      })
+      .catch(() => {
+        // On error, allow scanner to proceed (fail-open for UX)
+        setPhase('loading');
+      });
 
-    function sendDropout(reason: 'dropout_tab_close' | 'dropout_navigation') {
+    // Dropout on actual browser close only
+    function handleBeforeUnload() {
       if (isNavigatingRef.current) return;
-      const token = localStorage.getItem('studentToken');
-      if (!token) return;
-      if (typeof navigator?.sendBeacon !== 'function') return;
+      const t = localStorage.getItem('studentToken');
+      if (!t) return;
       try {
         navigator.sendBeacon(
           '/api/student/dropout',
-          new Blob([JSON.stringify({ token, reason })], { type: 'application/json' }),
+          new Blob([JSON.stringify({ token: t, reason: 'dropout_tab_close' })], { type: 'application/json' }),
         );
-      } catch {
-        // Ignore unsupported or failing beacon calls.
-      }
+      } catch { /* ignore */ }
     }
-
-    function handleBeforeUnload() {
-      sendDropout('dropout_tab_close');
-    }
-
-    function handleVisibilityChange() {
-      const token = localStorage.getItem('studentToken');
-      if (!token) return;
-      if (document.hidden) {
-        visibilityTimerRef.current = setTimeout(() => {
-          sendDropout('dropout_navigation');
-        }, 5000);
-      } else if (visibilityTimerRef.current) {
-        clearTimeout(visibilityTimerRef.current);
-        visibilityTimerRef.current = null;
-      }
-    }
-
-    // Only ban on actual browser close — NOT on tab switch
     window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [router, stageNumber]);
 
-    async function startScanner() {
+  // ── Start scanner when phase = 'loading' ────────────────────────────────────
+  useEffect(() => {
+    if (phase !== 'loading') return;
+    if (isNaN(stageNumber) || stageNumber < 1 || stageNumber > 5) return;
+
+    let qr: any = null;
+    let mounted = true;
+
+    async function start() {
       try {
         const { Html5Qrcode } = await import('html5-qrcode');
-        const qr = new Html5Qrcode('qr-reader-element');
-        html5QrCodeRef.current = qr;
+        if (!mounted) return;
+        qr = new Html5Qrcode('qr-video-container');
+        html5QrRef.current = qr;
 
         await qr.start(
-          { facingMode: 'environment' }, // rear camera
+          { facingMode: 'environment' },
           { fps: 15, qrbox: { width: 260, height: 260 } },
-          (decodedText) => {
-            if (matchedRef.current) return;
+          (decodedText: string) => {
+            if (!mounted) return;
+            if (noDetectTimerRef.current) { clearTimeout(noDetectTimerRef.current); noDetectTimerRef.current = null; }
 
-            if (noDetectTimerRef.current) {
-              clearTimeout(noDetectTimerRef.current);
-              noDetectTimerRef.current = null;
-            }
+            // Check if scanned QR path matches /stage/{stageNumber}
+            let path = '';
+            try { path = new URL(decodedText).pathname; } catch { path = decodedText.trim(); }
+            path = path.replace(/\/$/, '');
+            const expected = `/stage/${stageNumber}`;
 
-            if (isCorrectQr(decodedText)) {
-              matchedRef.current = true;
-              isNavigatingRef.current = true; // prevent dropout beacon
-              setStatus('matched');
-              setError(null);
+            if (path === expected || path.endsWith(expected)) {
               qr.stop().catch(() => {});
-              // Small delay to show the "QR Matched" overlay, then navigate
-              setTimeout(() => {
-                router.push(`/stage/${stageNumber}`);
-              }, 600);
+              setPhase('code_entry');
+              setErrorMsg('');
             } else {
-              setStatus('scanning');
-              setError('Wrong QR code. Please scan the correct QR for this stage.');
+              // Wrong QR — show error but keep scanning
+              setErrorMsg(`Wrong QR code. Please find QR #${stageNumber} and scan it.`);
             }
           },
           () => { /* per-frame error — ignore */ },
         );
 
-        setStatus('scanning');
-
-        // 60-second no-detect prompt
-        noDetectTimerRef.current = setTimeout(() => {
-          if (!matchedRef.current) {
-            setError('No QR code detected. Try moving closer or improving the lighting.');
-          }
-        }, 60_000);
-
+        if (mounted) {
+          setPhase('scanning');
+          // 60s no-detect prompt
+          noDetectTimerRef.current = setTimeout(() => {
+            if (mounted) setErrorMsg('No QR detected. Move closer and make sure it\'s well lit.');
+          }, 60_000);
+        }
       } catch (err: any) {
-        const msg = String(err?.message ?? err ?? '').toLowerCase();
+        if (!mounted) return;
+        const msg = String(err?.message ?? '').toLowerCase();
         if (msg.includes('permission') || msg.includes('notallowed') || msg.includes('denied')) {
-          setStatus('denied');
-          setError('Camera access was denied. Please allow camera access in your browser settings and refresh the page.');
-        } else if (msg.includes('notfound') || msg.includes('no camera')) {
-          setStatus('denied');
-          setError('No camera found on this device. Please use a phone with a camera.');
+          setPhase('denied');
+          setErrorMsg('Camera access denied. Please allow camera access in your browser settings.');
         } else {
-          setError(`Camera error: ${err?.message ?? 'Could not start camera. Please refresh and try again.'}`);
+          setPhase('error');
+          setErrorMsg(`Camera error: ${err?.message ?? 'Could not start camera'}. Try refreshing.`);
         }
       }
     }
 
-    startScanner();
+    start();
 
     return () => {
+      mounted = false;
       if (noDetectTimerRef.current) clearTimeout(noDetectTimerRef.current);
-      if (visibilityTimerRef.current) clearTimeout(visibilityTimerRef.current);
-      html5QrCodeRef.current?.stop().catch(() => {});
-      window.removeEventListener('beforeunload', handleBeforeUnload);
+      html5QrRef.current?.stop().catch(() => {});
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stageNumber, scannerKey]);
+  }, [stageNumber, scannerKey, phase]);
 
-  function handleRetry() {
-    // Stop existing scanner and restart
-    html5QrCodeRef.current?.stop().catch(() => {});
-    if (noDetectTimerRef.current) {
-      clearTimeout(noDetectTimerRef.current);
-      noDetectTimerRef.current = null;
-    }
-    matchedRef.current = false;
-    setError(null);
-    setAccessCode('');
-    setAccessError('');
-    setShowAccessModal(false);
-    setStatus('starting');
-    setScannerKey((key) => key + 1);
-  }
-
-  async function verifyAccessCode() {
-    setAccessError('');
-    if (!/^[A-Za-z0-9]{6}$/.test(accessCode)) {
-      setAccessError('Access code must be 6 alphanumeric characters.');
+  // ── Submit access code ──────────────────────────────────────────────────────
+  async function handleSubmitCode(e: FormEvent) {
+    e.preventDefault();
+    setCodeError('');
+    const code = accessCode.trim().toUpperCase();
+    if (!/^[A-Z0-9]{6}$/.test(code)) {
+      setCodeError('Access code must be exactly 6 alphanumeric characters.');
       return;
     }
-    setVerifying(true);
+
+    setPhase('submitting');
+    const token = localStorage.getItem('studentToken');
     try {
-      const token = localStorage.getItem('studentToken');
       const res = await fetch(`/api/student/stage/${stageNumber}/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ accessCode: accessCode.toUpperCase() }),
+        body: JSON.stringify({ accessCode: code }),
       });
       const data = await res.json();
+
       if (!res.ok || !data.success) {
-        const errorMessage = data.error ?? 'Access code is wrong. Please retry.';
-        setAccessError(errorMessage);
-        setShowAccessModal(false);
-        setAccessCode('');
-        setError('Access code is wrong. Please scan the QR again and retry.');
-        setStatus('starting');
-        matchedRef.current = false;
-        setScannerKey((key) => key + 1);
+        setPhase('code_entry');
+        setCodeError(data.error ?? 'Incorrect access code. Please try again.');
         return;
       }
 
+      // Success — navigate without triggering beforeunload
       isNavigatingRef.current = true;
-      if (visibilityTimerRef.current) {
-        clearTimeout(visibilityTimerRef.current);
-        visibilityTimerRef.current = null;
-      }
-      if (data.nextAction?.type === 'scan_qr' && data.nextAction.nextStage) {
-        router.push(`/qr/scan/${data.nextAction.nextStage}`);
-        return;
-      }
+      setPhase('success');
 
-      if (data.nextAction?.type === 'congratulations') {
-        router.push('/congratulations');
-        return;
-      }
-
-      if (data.nextAction?.type === 'goto_stage' && data.nextAction.nextStage) {
-        router.push(`/stage/${data.nextAction.nextStage}`);
-        return;
-      }
-
-      router.push(`/stage/${stageNumber}`);
-    } catch (err: any) {
-      setAccessError('Network error. Please try again.');
-      setShowAccessModal(false);
-      setStatus('scanning');
-      matchedRef.current = false;
       setTimeout(() => {
-        if (html5QrCodeRef.current) {
-          html5QrCodeRef.current.stop().catch(() => {});
+        if (data.nextAction?.type === 'scan_qr') {
+          router.push(`/qr/scan/${data.nextAction.nextStage}`);
+        } else {
+          router.push('/congratulations');
         }
-        window.location.reload();
-      }, 200);
-    } finally {
-      setVerifying(false);
+      }, 800);
+    } catch {
+      setPhase('code_entry');
+      setCodeError('Network error. Please try again.');
     }
   }
 
-  const stageNames = ['', 'Binary Puzzle', 'Mirror Text', 'Password Challenge', 'Caesar Cipher', 'Final Boss 🏆'];
-  const stageColors = ['', 'green', 'blue', 'yellow', 'orange', 'red'];
+  function retryScanner() {
+    setErrorMsg('');
+    setAccessCode('');
+    setCodeError('');
+    setPhase('loading');
+    setScannerKey((k) => k + 1);
+  }
+
+  const stageLabels = ['', 'Binary Decoder', 'Mirror Text', 'Password Challenge', 'Caesar Cipher', 'Final Boss 🏆'];
+  const stageDiffs  = ['', 'Medium', 'Medium-Hard', 'Hard', 'Very Hard', 'Final Boss'];
 
   return (
-    <div className="min-h-screen bg-gray-900 flex flex-col">
+    <div className="min-h-screen bg-gray-950 flex flex-col">
       <CollegeHeader />
 
-      <main className="flex-1 flex flex-col items-center px-4 py-6 space-y-5">
+      <main className="flex-1 flex flex-col items-center px-4 py-6 gap-5 max-w-sm mx-auto w-full">
+
         {/* Stage header */}
-        <div className="text-center space-y-1">
-          <div className="flex items-center justify-center gap-2">
-            <span className="text-3xl">📷</span>
-            <h2 className="text-2xl font-bold text-white">Scan QR {stageNumber}</h2>
-          </div>
-          <p className="text-gray-400 text-sm">
-            {stageNames[stageNumber] ?? ''} Stage
-          </p>
-          <p className="text-gray-500 text-xs">
-            Find QR code #{stageNumber} at its location, then point your camera at it
+        {phase !== 'verifying' && (
+        <div className="text-center w-full">
+          <h2 className="text-2xl font-bold text-white">
+            {phase === 'code_entry' || phase === 'submitting' || phase === 'success'
+              ? `🔑 Stage ${stageNumber} — Enter Code`
+              : `📷 Stage ${stageNumber} — Scan QR`}
+          </h2>
+          <p className="text-gray-400 text-sm mt-1">
+            {stageLabels[stageNumber]} · <span className="text-blue-400">{stageDiffs[stageNumber]}</span>
           </p>
         </div>
+        )}
 
-        {/* Camera viewfinder */}
-        <div className="relative w-full max-w-sm">
-          {/* Corner decorations */}
-          <div className="absolute top-2 left-2 w-8 h-8 border-t-4 border-l-4 border-blue-400 rounded-tl-lg z-10 pointer-events-none" />
-          <div className="absolute top-2 right-2 w-8 h-8 border-t-4 border-r-4 border-blue-400 rounded-tr-lg z-10 pointer-events-none" />
-          <div className="absolute bottom-2 left-2 w-8 h-8 border-b-4 border-l-4 border-blue-400 rounded-bl-lg z-10 pointer-events-none" />
-          <div className="absolute bottom-2 right-2 w-8 h-8 border-b-4 border-r-4 border-blue-400 rounded-br-lg z-10 pointer-events-none" />
-
-          {/* Scanning line animation */}
-          {status === 'scanning' && (
-            <div className="absolute left-4 right-4 h-0.5 bg-blue-400 opacity-80 z-10 pointer-events-none"
-              style={{ animation: 'scan-line 2s linear infinite', top: '50%' }} />
-          )}
-
-          {/* Camera element — html5-qrcode renders into this div */}
-          <div
-            id="qr-reader-element"
-            className="w-full rounded-2xl overflow-hidden bg-black shadow-2xl"
-            style={{ minHeight: '320px' }}
-          />
-
-          {/* Status overlay */}
-          {status === 'starting' && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black/70 rounded-2xl">
-              <div className="text-center space-y-2">
-                <div className="w-10 h-10 border-4 border-blue-400 border-t-transparent rounded-full animate-spin mx-auto" />
-                <p className="text-blue-300 text-sm">Starting camera…</p>
-              </div>
+        {/* ── VERIFYING AUTH ── */}
+        {phase === 'verifying' && (
+          <div className="flex items-center justify-center py-16">
+            <div className="text-center space-y-3">
+              <div className="w-10 h-10 border-4 border-blue-400 border-t-transparent rounded-full animate-spin mx-auto" />
+              <p className="text-gray-400 text-sm">Verifying…</p>
             </div>
-          )}
-
-          {status === 'matched' && (
-            <div className="absolute inset-0 flex items-center justify-center bg-green-900/80 rounded-2xl">
-              <div className="text-center space-y-2">
-                <div className="text-5xl animate-bounce">✅</div>
-                <p className="text-green-300 font-bold">QR Matched!</p>
-                <p className="text-green-200 text-sm">Loading stage…</p>
-              </div>
-            </div>
-          )}
-            {/* Access code modal shown after QR match */}
-            {showAccessModal && (
-              <div className="absolute inset-0 flex items-center justify-center bg-black/60 rounded-2xl z-20">
-                <div className="w-full max-w-sm bg-white rounded-xl p-6 space-y-4">
-                  <h3 className="text-lg font-semibold text-gray-800">Enter Access Code</h3>
-                  <p className="text-sm text-gray-600">Scan verified. Please enter the stage access code to continue.</p>
-                  <input
-                    value={accessCode}
-                    onChange={(e) => { setAccessCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '')); setAccessError(''); }}
-                    maxLength={6}
-                    className="w-full px-3 py-2 border rounded-lg text-center font-mono text-2xl tracking-widest focus:outline-none"
-                    placeholder="XXXXXX"
-                  />
-                  {accessError && <p className="text-sm text-red-600">{accessError}</p>}
-                  <div className="flex gap-2">
-                    <button
-                      onClick={handleRetry}
-                      className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-800 py-2 rounded-lg"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      onClick={verifyAccessCode}
-                      disabled={verifying}
-                      className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg"
-                    >
-                      {verifying ? 'Checking…' : 'Submit'}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-        </div>
-
-        {/* Scanning status */}
-        {status === 'scanning' && !error && (
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
-            <p className="text-green-400 text-sm font-medium">Camera active — hold QR code in frame</p>
           </div>
         )}
 
-        {/* Error state */}
-        {error && (
-          <div className="w-full max-w-sm bg-red-900/50 border border-red-600 rounded-2xl p-4 text-center space-y-3">
-            <p className="text-red-300 text-sm leading-relaxed">{error}</p>
-            {status !== 'denied' && (
-              <button
-                onClick={handleRetry}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-xl text-sm font-medium transition-colors"
-              >
-                🔄 Try Again
-              </button>
+        {/* ── SCANNING PHASE ── */}
+        {(phase === 'loading' || phase === 'scanning') && (
+          <>
+            <div className="relative w-full">
+              {/* Corner decorators */}
+              <div className="absolute top-2 left-2 w-8 h-8 border-t-4 border-l-4 border-blue-400 rounded-tl-lg z-10 pointer-events-none" />
+              <div className="absolute top-2 right-2 w-8 h-8 border-t-4 border-r-4 border-blue-400 rounded-tr-lg z-10 pointer-events-none" />
+              <div className="absolute bottom-2 left-2 w-8 h-8 border-b-4 border-l-4 border-blue-400 rounded-bl-lg z-10 pointer-events-none" />
+              <div className="absolute bottom-2 right-2 w-8 h-8 border-b-4 border-r-4 border-blue-400 rounded-br-lg z-10 pointer-events-none" />
+              {/* Camera */}
+              <div
+                id="qr-video-container"
+                className="w-full rounded-2xl overflow-hidden bg-black shadow-2xl"
+                style={{ minHeight: '300px' }}
+              />
+              {/* Starting overlay */}
+              {phase === 'loading' && (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/80 rounded-2xl">
+                  <div className="text-center space-y-2">
+                    <div className="w-10 h-10 border-4 border-blue-400 border-t-transparent rounded-full animate-spin mx-auto" />
+                    <p className="text-blue-300 text-sm">Starting camera…</p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {phase === 'scanning' && !errorMsg && (
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
+                <p className="text-green-400 text-sm">Camera active — hold QR code in frame</p>
+              </div>
             )}
-            {status === 'denied' && (
-              <div className="space-y-2">
-                <p className="text-xs text-gray-400">
-                  On Chrome: tap the 🔒 lock icon → Site settings → Camera → Allow
-                </p>
-                <button
-                  onClick={() => window.location.reload()}
-                  className="w-full bg-gray-700 hover:bg-gray-600 text-white py-2 rounded-xl text-sm transition-colors"
-                >
-                  Reload Page
+
+            {errorMsg && (
+              <div className="w-full bg-red-900/40 border border-red-700 rounded-2xl p-4 text-center space-y-3">
+                <p className="text-red-300 text-sm">{errorMsg}</p>
+                <button onClick={retryScanner} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-xl text-sm font-medium transition-colors">
+                  🔄 Try Again
                 </button>
               </div>
             )}
+          </>
+        )}
+
+        {/* ── CAMERA DENIED ── */}
+        {phase === 'denied' && (
+          <div className="w-full bg-red-900/40 border border-red-700 rounded-2xl p-5 text-center space-y-3">
+            <p className="text-4xl">📵</p>
+            <p className="text-red-300 text-sm">{errorMsg}</p>
+            <p className="text-gray-500 text-xs">Chrome: tap 🔒 → Camera → Allow, then reload.</p>
+            <button onClick={() => window.location.reload()} className="w-full bg-gray-700 hover:bg-gray-600 text-white py-2 rounded-xl text-sm transition-colors">
+              Reload Page
+            </button>
+          </div>
+        )}
+
+        {/* ── ACCESS CODE ENTRY ── */}
+        {(phase === 'code_entry' || phase === 'submitting') && (
+          <div className="w-full space-y-4">
+            <div className="bg-green-900/30 border border-green-700 rounded-2xl p-4 text-center">
+              <p className="text-green-400 font-semibold">✅ QR Scanned Successfully!</p>
+              <p className="text-green-300 text-sm mt-1">Now enter the 6-character access code shown at this station.</p>
+            </div>
+
+            <form onSubmit={handleSubmitCode} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2 text-center">Access Code</label>
+                <input
+                  type="text"
+                  maxLength={6}
+                  autoCapitalize="characters"
+                  autoFocus
+                  value={accessCode}
+                  onChange={(e) => { setAccessCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '')); setCodeError(''); }}
+                  disabled={phase === 'submitting'}
+                  className="w-full bg-gray-800 border border-gray-600 rounded-2xl px-4 py-4 text-white text-3xl font-mono tracking-[0.3em] text-center focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50"
+                  placeholder="XXXXXX"
+                />
+                {codeError && <p className="text-red-400 text-sm mt-2 text-center">{codeError}</p>}
+              </div>
+
+              <button
+                type="submit"
+                disabled={phase === 'submitting' || accessCode.length < 6}
+                className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed text-white py-3.5 rounded-2xl text-base font-semibold transition-colors flex items-center justify-center gap-2"
+              >
+                {phase === 'submitting'
+                  ? <><span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" /> Checking…</>
+                  : '🔓 Submit Code'}
+              </button>
+
+              <button
+                type="button"
+                onClick={retryScanner}
+                className="w-full bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white py-2.5 rounded-2xl text-sm transition-colors"
+              >
+                ↩ Scan QR Again
+              </button>
+            </form>
+          </div>
+        )}
+
+        {/* ── SUCCESS ── */}
+        {phase === 'success' && (
+          <div className="w-full bg-green-900/40 border border-green-700 rounded-2xl p-6 text-center space-y-3">
+            <div className="text-5xl">🎉</div>
+            <p className="text-green-300 font-bold text-lg">Stage {stageNumber} Complete!</p>
+            <p className="text-green-400 text-sm">Redirecting to next stage…</p>
+            <div className="w-8 h-8 border-4 border-green-400 border-t-transparent rounded-full animate-spin mx-auto" />
           </div>
         )}
 
         {/* Hint */}
-        <div className="w-full max-w-sm bg-gray-800 border border-gray-700 rounded-xl p-3 text-center">
-          <p className="text-gray-400 text-xs">
-            💡 Make sure the QR code is well-lit and fills the camera frame
-          </p>
-        </div>
+        {phase === 'scanning' && !errorMsg && (
+          <div className="w-full bg-gray-900 border border-gray-700 rounded-xl p-3 text-center">
+            <p className="text-gray-400 text-xs">💡 Make sure QR #{stageNumber} is well-lit and fills the camera frame</p>
+          </div>
+        )}
       </main>
 
       <SessionWarningBanner />
-
-      <style jsx>{`
-        @keyframes scan-line {
-          0% { top: 10%; }
-          50% { top: 90%; }
-          100% { top: 10%; }
-        }
-      `}</style>
     </div>
   );
 }

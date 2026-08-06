@@ -87,15 +87,24 @@ export default function RegistrationSuccess() {
                 <span className="font-medium">Hint:</span> {hint}
               </p>
             )}
-            <div className="pt-1">
+            <div className="pt-1 space-y-2">
+              <button
+                onClick={() => {
+                  isNavigatingRef.current = true;
+                  router.push('/qr/scan/1');
+                }}
+                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl text-sm font-medium transition-colors"
+              >
+                📷 Scan Stage 1 QR Code
+              </button>
               <button
                 onClick={() => {
                   isNavigatingRef.current = true;
                   router.push('/stage/1');
                 }}
-                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl text-sm font-medium transition-colors"
+                className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 py-2 rounded-xl text-xs font-medium transition-colors"
               >
-                📜 View Stage 1 Puzzle
+                📜 View Stage 1 Puzzle (text)
               </button>
             </div>
           </div>
