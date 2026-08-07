@@ -2,8 +2,9 @@
 
 export const COLLEGE_NAME = 'Vishwakamal Mahavidyalay';
 
-const LOGO_URL     = 'https://i.postimg.cc/c1cHCbHX/Whats-App-Image-2026-07-31-at-6-24-50-PM.jpg';
-const PORTRAIT_URL = 'https://i.postimg.cc/YqHBC28b/Chat-GPT-Image-Aug-7-2026-03-15-14-PM.png';
+// Proxied through /api/proxy-image to avoid mobile hotlink blocks on postimg.cc
+const LOGO_URL     = '/api/proxy-image?url=' + encodeURIComponent('https://i.postimg.cc/c1cHCbHX/Whats-App-Image-2026-07-31-at-6-24-50-PM.jpg');
+const PORTRAIT_URL = '/api/proxy-image?url=' + encodeURIComponent('https://i.postimg.cc/YqHBC28b/Chat-GPT-Image-Aug-7-2026-03-15-14-PM.png');
 
 export default function CollegeHeader() {
   return (
