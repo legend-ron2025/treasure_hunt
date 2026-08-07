@@ -123,9 +123,25 @@ export default function QRScanPage() {
     }
     window.addEventListener('beforeunload', handleBeforeUnload);
     document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // Poll event status every 5s — redirect non-winners to /event-ended when event ends
+    const eventPoll = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/time?_t=${Date.now()}`, { cache: 'no-store' });
+        if (res.ok) {
+          const d = await res.json();
+          if (d.eventStatus === 'ended') {
+            isNavigatingRef.current = true;
+            window.location.replace('/event-ended');
+          }
+        }
+      } catch { /* ignore */ }
+    }, 5000);
+
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      clearInterval(eventPoll);
     };
   }, [router, stageNumber]);
 

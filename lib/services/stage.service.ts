@@ -62,7 +62,9 @@ export async function verifyAccessCode(
 
 /**
  * Record stage completion and advance participant to next stage.
- * After stage 5 completes, marks the participant as 'completed'.
+ * After stage 5 completes, marks the participant as 'completed'
+ * AND immediately ends the event (sets end_time = now) so non-winners
+ * get redirected to the event-ended page.
  */
 export async function advanceParticipantStage(
   participantId: string,
@@ -91,6 +93,18 @@ export async function advanceParticipantStage(
             eq(participants.current_stage, stageNumber),
           ),
         );
+
+      // When stage 5 is completed → immediately end the event so non-winners
+      // get redirected to the event-ended page automatically.
+      if (isFinished) {
+        const { eventConfig } = await import('../db/schema');
+        const now = new Date();
+        // Only end if event is still active (don't reopen an already-ended event)
+        await db
+          .update(eventConfig)
+          .set({ end_time: now, updated_at: now })
+          .where(eq(eventConfig.id, 1));
+      }
 
       return;
     } catch (err) {
